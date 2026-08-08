@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>تصدير بيانات الأندلس — أداة الترحيل</title>
+  <style>
+    body { font-family: system-ui, sans-serif; direction: rtl; background: #f1f6fb; padding: 40px 20px; }
+    .card { max-width: 640px; margin: 0 auto; background: #fff; border-radius: 16px; padding: 32px; box-shadow: 0 8px 30px rgba(46,127,184,0.12); }
+    h1 { color: #15385c; font-size: 22px; margin-bottom: 8px; }
+    p { color: #5b7a9e; line-height: 1.8; margin-bottom: 16px; }
+    button { background: linear-gradient(135deg,#1d5a8a,#2e7fb8); color: #fff; border: none; border-radius: 12px; padding: 14px 28px; font-size: 15px; font-weight: 700; cursor: pointer; font-family: inherit; }
+    .status { margin-top: 20px; padding: 14px; border-radius: 10px; font-size: 13px; }
+    .ok { background: #10b98115; color: #059669; border: 1px solid #10b98130; }
+    .err { background: #ef444415; color: #dc2626; border: 1px solid #ef444430; }
+    ol { color: #5b7a9e; line-height: 2; padding-right: 20px; }
+    code { background: #eff6fe; padding: 2px 8px; border-radius: 6px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🔄 أداة ترحيل بيانات الأندلس</h1>
+    <p>تُصدّر هذه الأداة كل بيانات النظام المخزّنة في هذا المتصفح إلى ملف واحد، لاستيراده في قاعدة البيانات الجديدة.</p>
+    <ol>
+      <li>افتح هذه الصفحة <strong>من نفس المتصفح</strong> الذي يحوي بيانات النظام.</li>
+      <li>اضغط زر التصدير أدناه.</li>
+      <li>سيُنزّل ملف <code>andlus_export.json</code>.</li>
+      <li>سلّمه لمسؤول التقنية لاستيراده عبر <code>npm run migrate</code>.</li>
+    </ol>
+    <button id="exportBtn">📥 تصدير كل البيانات</button>
+    <div id="status"></div>
+  </div>
+  <script>
+    const NORMAL_KEYS = ['users_360c','evals_360c','idps_360c','impact_360c','approvals_360c','evalwindow_360c','editreq_360c','twiceeval_360c','intcourses_360c','locks_360c','readings_360c','adminpass_360c'];
+    const SHARED_KEYS = ['customComps_360c','customJobs_360c','customSources_360c','customSourceMap_360c','customWeights_360c'];
+
+    document.getElementById('exportBtn').onclick = async () => {
+      const status = document.getElementById('status');
+      try {
+        const out = { keys: {}, shared: {}, exportedAt: new Date().toISOString() };
+        let found = 0;
+        const readKey = async (k, shared) => {
+          if (window.storage && window.storage.get) {
+            const r = await window.storage.get(k, shared);
+            return r && r.value ? JSON.parse(r.value) : null;
+          }
+          const raw = localStorage.getItem(k);
+          return raw ? JSON.parse(raw) : null;
+        };
+        for (const k of NORMAL_KEYS) { const v = await readKey(k, false); if (v !== null) { out.keys[k] = v; found++; } }
+        for (const k of SHARED_KEYS) { const v = await readKey(k, true); if (v !== null) { out.shared[k] = v; found++; } }
+        if (found === 0) throw new Error('لم تُوجد بيانات في هذا المتصفح. تأكّد أنه المتصفح الصحيح.');
+        const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob); a.download = 'andlus_export.json'; a.click();
+        status.className = 'status ok';
+        status.textContent = '✓ صُدّرت ' + found + ' مجموعة بيانات بنجاح. نزّل الملف وسلّمه لمسؤول التقنية.';
+      } catch (e) {
+        status.className = 'status err';
+        status.textContent = '✗ ' + e.message;
+      }
+    };
+  </script>
+</body>
+</html>

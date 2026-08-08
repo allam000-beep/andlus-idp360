@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>نظام الأندلس — التقييم 360° وخطط التطور المهني</title>
+  <link href="https://fonts.googleapis.com/css2?family=El+Messiri:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet" />
+  <style>
+    * { margin: 0; box-sizing: border-box; }
+    body { font-family: 'El Messiri', sans-serif; }
+    #root { min-height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="/api.js?v=11"></script>
+  <script src="/app.bundle.js?v=11"></script>
+  <script>
+    const { useState, useEffect, useMemo } = React;
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(window.__AndlusApp));
+  </script>
+</body>
+</html>

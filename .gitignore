@@ -1,0 +1,15 @@
+node_modules/
+*.db
+*.db-wal
+*.db-shm
+.env
+npm-debug.log
+
+# قاعدة التشغيل المحلي (الملحق في دليل النشر)
+tmp/
+
+# نسخة مصدرية مكرّرة — الشيفرة نفسها موجودة في المستودع
+andlus-server.zip
+
+# إعدادات أدوات محلية خاصة بجهازك لا بالمشروع
+.claude/settings.local.json
