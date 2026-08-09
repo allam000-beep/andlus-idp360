@@ -16,7 +16,8 @@ migrate();
 seedDefaults();
 
 // بذر حساب المدير تلقائياً إن لم يكن موجود (كلمة المرور من ADMIN_PASSWORD أو الافتراضية)
-(async () => {
+// يجب أن يكتمل قبل الاستماع للطلبات، وإلا فشل أوّل تسجيل دخول بعد الإقلاع البارد.
+async function seedAdmin() {
   const exists = db.prepare("SELECT 1 FROM users WHERE username='admin'").get();
   if (!exists) {
     const pass = process.env.ADMIN_PASSWORD || 'Admin@123';
@@ -25,7 +26,7 @@ seedDefaults();
       .run('__admin__','admin',hash,'مدير النظام','admin');
     console.log('✓ تم إنشاء حساب المدير: admin (غيّر كلمة المرور فوراً)');
   }
-})();
+}
 
 const app = express();
 
@@ -46,9 +47,31 @@ app.use(helmet({
 app.use(cors({ origin: process.env.CORS_ORIGIN || true, credentials: true }));
 app.use(express.json({ limit: '2mb' })); // حدّ حجم الطلب
 
-// تحديد معدّل الطلبات (حماية من الإغراق/التخمين)
-const apiLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 1000 });
-const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 }); // أشدّ على الدخول
+// ─── تحديد معدّل الطلبات (حماية من الإغراق/التخمين) ───
+// مهم: منسوبو المدرسة الواحدة يخرجون غالباً من عنوان IP عام واحد (NAT)، فالحدّ
+// يُحتسب عليهم مجتمعين لا فرادى. لذلك الحدود سخيّة، وحدّ الدخول يُحتسب لكل
+// (عنوان + اسم مستخدم) ولا يَعُدّ إلا المحاولات الفاشلة — فيبقى الحاجز أمام
+// تخمين كلمة مرور حساب بعينه دون أن يُقفل النظام على بقيّة الموظفين.
+const limitMsg = 'تجاوزت عدد الطلبات المسموح مؤقتاً. انتظر قليلاً ثم أعد المحاولة.';
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.RATE_LIMIT_API || 20000),
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => res.status(429).json({ error: limitMsg }),
+});
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.RATE_LIMIT_LOGIN || 30),
+  skipSuccessfulRequests: true,   // الدخول الناجح لا يستهلك الرصيد
+  keyGenerator: (req) => `${req.ip}|${String((req.body && req.body.username) || '').toLowerCase()}`,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => res.status(429).json({
+    error: 'محاولات دخول فاشلة كثيرة لهذا الحساب. انتظر 15 دقيقة ثم أعد المحاولة.',
+  }),
+});
 app.use('/api/', apiLimiter);
 app.use('/api/auth/login', loginLimiter);
 
@@ -77,8 +100,13 @@ app.use((err, req, res, next) => {
   res.status(err.status || 500).json({ error: msg });
 });
 
-app.listen(cfg.PORT, () => {
-  console.log(`✓ خادم الأندلس يعمل على المنفذ ${cfg.PORT} [${cfg.NODE_ENV}]`);
-});
+// لا نستقبل الطلبات إلا بعد اكتمال بذر حساب المدير
+seedAdmin()
+  .catch((e) => console.error('فشل بذر حساب المدير:', e))
+  .finally(() => {
+    app.listen(cfg.PORT, () => {
+      console.log(`✓ خادم الأندلس يعمل على المنفذ ${cfg.PORT} [${cfg.NODE_ENV}]`);
+    });
+  });
 
 module.exports = app;

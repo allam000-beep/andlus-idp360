@@ -29,9 +29,43 @@ function getEmployeeEval(req, res) {
   if (!perm.canReadEmployee(actor, target)) return res.json(EMPTY_EVAL());
 
   const rows = db.prepare('SELECT party, rater_id, round, comp_key, item_index, score FROM eval_scores WHERE employee_id = ?').all(empId);
+  res.json(buildEvalPayload(rows, canSeeRaterDetail(req.user.role)));
+}
 
-  const ANON = ['peer','subordinate','beneficiary'];
-  // نبني الجولتين منفصلتين
+// ─── قراءة تقييمات الجميع دفعةً واحدة ───
+// GET /api/evals
+// الواجهة كانت تُصدر طلباً لكل موظف (طلب + عدد الموظفين)، فصار التحميل الواحد
+// يستهلك مئات الطلبات ويصطدم بحدّ المعدّل. هنا استعلام واحد للدرجات كلها ثم
+// تجميعها في الذاكرة. المخرجات مطابقة تماماً لمخرجات المسار المفرد لكل موظف.
+function listAllEvals(req, res) {
+  const actor = perm.loadUser(req.user.id);
+  const canSeeDetail = canSeeRaterDetail(req.user.role);
+
+  const rows = db.prepare('SELECT employee_id, party, rater_id, round, comp_key, item_index, score FROM eval_scores').all();
+  const byEmp = new Map();
+  for (const r of rows) {
+    let list = byEmp.get(r.employee_id);
+    if (!list) byEmp.set(r.employee_id, list = []);
+    list.push(r);
+  }
+
+  const evals = {};
+  for (const u of perm.loadAllUsers()) {
+    if (u.role === 'admin') continue;                 // مدير النظام لا يُقيَّم
+    // غير المخوّل يحصل على هيكل فارغ لا على 403 — لنفس سبب المسار المفرد:
+    // رفض موظف واحد كان سيُسقط تحميل الشاشة كاملاً.
+    evals[u.id] = perm.canReadEmployee(actor, u)
+      ? buildEvalPayload(byEmp.get(u.id) || [], canSeeDetail)
+      : EMPTY_EVAL();
+  }
+  res.json({ evals });
+}
+
+const canSeeRaterDetail = (role) => ['stage_mgr', 'branch_mgr', 'admin'].includes(role);
+
+// يبني ردّ التقييم من صفوف درجات موظف واحد (مصدر واحد للمنطق يشترك فيه المساران)
+function buildEvalPayload(rows, canSeeDetail) {
+  const ANON = ['peer', 'subordinate', 'beneficiary'];
   const build = (roundRows) => {
     const result = { self:{}, peer:{}, supervisor:{}, stage_mgr:{}, subordinate:{}, beneficiary:{} };
     const raters = { peer:{}, subordinate:{}, beneficiary:{} };
@@ -56,12 +90,8 @@ function getEmployeeEval(req, res) {
   const raters = r1.raters;
 
   // ب-4: إن وُجدت درجات جولة ثانية، نضيفها تحت __r2 (نفس بنية الواجهة)
-  if (r2rows.length) {
-    const r2 = build(r2rows);
-    result.__r2 = r2.result;
-  }
+  if (r2rows.length) result.__r2 = build(r2rows).result;
 
-  const canSeeDetail = ['stage_mgr', 'branch_mgr', 'admin'].includes(req.user.role);
   const payload = { eval: result };
   if (canSeeDetail) {
     payload.peerRaters = raters.peer;
@@ -71,8 +101,7 @@ function getEmployeeEval(req, res) {
   payload.peerCount = Object.keys(raters.peer).length;
   payload.subordinateCount = Object.keys(raters.subordinate).length;
   payload.beneficiaryCount = Object.keys(raters.beneficiary).length;
-
-  res.json(payload);
+  return payload;
 }
 
 // حساب متوسط تقييمات الزملاء لكل بند (لا يظهر بند قيّمه أقل من الحد)
@@ -182,4 +211,4 @@ function getLocks(req, res) {
   res.json({ locks });
 }
 
-module.exports = { getEmployeeEval, saveEval, lockEval, getLocks };
+module.exports = { getEmployeeEval, listAllEvals, saveEval, lockEval, getLocks };

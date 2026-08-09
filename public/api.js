@@ -32,9 +32,10 @@
     async login(username, password) {
       const d = await call('POST', '/auth/login', { username, password });
       TOKEN = d.token; localStorage.setItem('andlus_token', d.token);
+      invalidateSettings();   // جلسة جديدة — لا نُبقي إعدادات جلسة سابقة في الذاكرة
       return d.user;
     },
-    logout() { TOKEN = null; localStorage.removeItem('andlus_token'); },
+    logout() { TOKEN = null; localStorage.removeItem('andlus_token'); invalidateSettings(); },
     isLoggedIn() { return !!TOKEN; },
     async me() { return (await call('GET', '/auth/me')).user; },
     async changePassword(currentPassword, newPassword) {
@@ -48,6 +49,9 @@
     },
   };
 
+  // هيكل تقييم فارغ — احتياط إن غاب موظف عن ردّ الجلب الجماعي
+  const _emptyEval = () => ({ self:{}, peer:{}, supervisor:{}, stage_mgr:{}, subordinate:{}, beneficiary:{} });
+
   // ─── تحويل مفاتيح st إلى نداءات API ───
   // القراءة: تُعيد نفس بنية البيانات التي كانت في window.storage
   async function get(key) {
@@ -58,12 +62,17 @@
         return users.map(mapUserToClient);
       }
       case 'evals_360c': {
-        const { users } = await call('GET', '/users');
+        // طلبان اثنان مهما بلغ عدد الموظفين. كان سابقاً طلباً لكل موظف، فمدرسة
+        // بمئتي موظف كانت تستهلك ٢٠١ طلباً في كل تحميل وتصطدم بحدّ المعدّل.
+        const [{ users }, { evals }] = await Promise.all([
+          call('GET', '/users'),
+          call('GET', '/evals'),
+        ]);
         const out = {};
         for (const u of users) {
           // نجلب تقييمات كل من يُقيَّم (الموظف والقياديون والتخصصيون) — لا الموظف وحده
           if (u.role === 'admin') continue;
-          const d = await call('GET', '/evals/' + u.id);
+          const d = (evals && evals[u.id]) || { eval: _emptyEval(), peerCount: 0 };
           out[u.id] = { ...d.eval };
           if (d.peerRaters) out[u.id].peerRaters = d.peerRaters;
           if (d.subordinateRaters) out[u.id].subordinateRaters = d.subordinateRaters;
@@ -236,26 +245,56 @@
   }
 
   // ─── الإعدادات المشتركة ───
+  // خريطة واحدة للمفاتيح (كانت مكرّرة في القراءة والكتابة، فأيّ تعديل على إحداهما
+  // كان يمكن أن يُنسى في الأخرى).
+  const SHARED_KEYS = {
+    customComps_360c: 'comps', customJobs_360c: 'jobs',
+    customSources_360c: 'sources', customSourceMap_360c: 'sourceMap',
+    customWeights_360c: 'weights', compRoleItems_360c: 'compRoleItems',
+    profCerts_360c: 'profCerts',
+  };
+
+  // مسار /settings يُعيد كتلة الإعدادات كاملة (~9KB) لا مفتاحاً واحداً، وكانت
+  // الواجهة تناديه مرّة لكل مفتاح — سبعة طلبات متطابقة في كل تحميل. نجمعها هنا:
+  //   • النداءات المتزامنة تتشارك الوعد نفسه (طلب واحد لا سبعة).
+  //   • القراءات المتقاربة تُخدَم من الذاكرة لمدة قصيرة.
+  //   • أيّ كتابة تُبطل الذاكرة فوراً حتى لا يُقرأ ما قبل الحفظ.
+  const SETTINGS_TTL_MS = 3000;
+  let _settingsCache = null;      // { at, data }
+  let _settingsInFlight = null;
+
+  function invalidateSettings() { _settingsCache = null; _settingsInFlight = null; }
+
+  function loadSettings() {
+    if (_settingsCache && Date.now() - _settingsCache.at < SETTINGS_TTL_MS) {
+      return Promise.resolve(_settingsCache.data);
+    }
+    if (_settingsInFlight) return _settingsInFlight;
+    const p = call('GET', '/settings').then(
+      (d) => {
+        const data = (d && d.settings) || {};
+        _settingsCache = { at: Date.now(), data };
+        if (_settingsInFlight === p) _settingsInFlight = null;
+        return data;
+      },
+      (err) => {                     // عند الفشل لا نخزّن شيئاً كي تُعاد المحاولة
+        if (_settingsInFlight === p) _settingsInFlight = null;
+        throw err;
+      }
+    );
+    _settingsInFlight = p;
+    return p;
+  }
+
   async function getShared(key) {
-    const map = {
-      customComps_360c: 'comps', customJobs_360c: 'jobs',
-      customSources_360c: 'sources', customSourceMap_360c: 'sourceMap',
-      customWeights_360c: 'weights', compRoleItems_360c: 'compRoleItems',
-      profCerts_360c: 'profCerts',
-    };
-    const skey = map[key]; if (!skey) return null;
-    const { settings } = await call('GET', '/settings');
+    const skey = SHARED_KEYS[key]; if (!skey) return null;
+    const settings = await loadSettings();
     return settings[skey] ?? null;
   }
   async function setShared(key, value) {
-    const map = {
-      customComps_360c: 'comps', customJobs_360c: 'jobs',
-      customSources_360c: 'sources', customSourceMap_360c: 'sourceMap',
-      customWeights_360c: 'weights', compRoleItems_360c: 'compRoleItems',
-      profCerts_360c: 'profCerts',
-    };
-    const skey = map[key]; if (!skey) return;
+    const skey = SHARED_KEYS[key]; if (!skey) return;
     await call('POST', '/settings', { key: skey, value });
+    invalidateSettings();   // الحفظ يُبطل الذاكرة فتُقرأ القيمة الجديدة لا القديمة
   }
 
   // ─── دوال API مباشرة (للعمليات الدقيقة) ───

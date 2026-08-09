@@ -12,7 +12,9 @@ const data = require('../controllers/dataController');
 router.use(requireAuth);
 
 // ─── التقييمات ───
+// ملاحظة ترتيب: المسارات الثابتة قبل :employeeId وإلا التقطها كمعرّف موظف
 router.get('/evals/locks', evals.getLocks);
+router.get('/evals', evals.listAllEvals);          // الجميع في طلب واحد
 router.get('/evals/:employeeId', evals.getEmployeeEval);
 router.post('/evals/:employeeId', evals.saveEval);
 router.post('/evals/:employeeId/lock', evals.lockEval);
