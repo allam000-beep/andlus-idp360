@@ -33,10 +33,11 @@ function getWindows(req, res) {
 function setWindow(req, res) {
   const { branch, isOpen, openDate, closeDate } = req.body || {};
   if (!branch) return res.status(400).json({ error: 'الفرع مطلوب' });
-  db.prepare(`INSERT INTO eval_windows (branch,is_open,open_date,close_date) VALUES (?,?,?,?)
+  // ملاحظة: نستخدم معاملات مسمّاة فقط (لا نخلط ? مع @) — الخلط يرمي خطأً في better-sqlite3
+  db.prepare(`INSERT INTO eval_windows (branch,is_open,open_date,close_date)
+    VALUES (@branch,@io,@od,@cd)
     ON CONFLICT(branch) DO UPDATE SET is_open=@io, open_date=@od, close_date=@cd`)
-    .run(branch, isOpen ? 1 : 0, openDate || null, closeDate || null,
-         { io: isOpen ? 1 : 0, od: openDate || null, cd: closeDate || null });
+    .run({ branch, io: isOpen ? 1 : 0, od: openDate || null, cd: closeDate || null });
   res.json({ ok: true });
 }
 

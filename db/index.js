@@ -57,6 +57,10 @@ function migrate() {
     db.exec('ALTER TABLE idps ADD COLUMN certificate TEXT');
     console.log('✓ أُضيف عمود certificate إلى idps');
   }
+  if (!idpCols.includes('is_final')) {
+    db.exec('ALTER TABLE idps ADD COLUMN is_final INTEGER DEFAULT 0');
+    console.log('✓ أُضيف عمود is_final إلى idps');
+  }
   // 5) عمود init_password في account_requests (كلمة المرور المبدئية)
   const arSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='account_requests'").get()?.sql;
   if (arSql) {

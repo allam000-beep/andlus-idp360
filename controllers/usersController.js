@@ -131,19 +131,7 @@ function remove(req, res) {
   const id = req.params.id;
   const u = db.prepare('SELECT 1 FROM users WHERE id = ?').get(id);
   if (!u) return res.status(404).json({ error: 'المستخدم غير موجود' });
-
-  const tx = db.transaction(() => {
-    db.prepare('DELETE FROM users WHERE id = ?').run(id);  // CASCADE يحذف المرتبطات
-    // eval_locks/readings/approvals مفاتيحها نصّية مركّبة (empId__…) لا مفاتيح أجنبية،
-    // فلا يطالها CASCADE. نحذفها يدوياً وإلا بقيت أبداً — والأخطر أنّ إعادة استيراد
-    // موظف بنفس المعرّف (أداة الترحيل تُبقي المعرّفات) كانت سترث أقفال "تم" القديمة.
-    // ملاحظة: '_' محرف بدل في LIKE، فنهرّبه بـ ESCAPE وإلا طابق أيّ محرف.
-    db.prepare("DELETE FROM eval_locks WHERE lock_key = ? OR lock_key LIKE ? ESCAPE '\\' OR lock_key LIKE ? ESCAPE '\\'")
-      .run(id, id + '\\_\\_%', '%\\_\\_peer\\_\\_' + id);
-    db.prepare("DELETE FROM readings  WHERE reading_key = ? OR reading_key LIKE ? ESCAPE '\\'").run(id, id + '\\_\\_%');
-    db.prepare("DELETE FROM approvals WHERE approval_key = ? OR approval_key LIKE ? ESCAPE '\\'").run(id, id + '\\_\\_%');
-  });
-  tx();
+  db.prepare('DELETE FROM users WHERE id = ?').run(id);  // CASCADE يحذف المرتبطات
   perm.invalidateUserCache();
   db.prepare('INSERT INTO audit_log (user_id, action, detail, ip) VALUES (?,?,?,?)')
     .run(req.user.id, 'delete_user', id, req.ip);

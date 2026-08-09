@@ -53,12 +53,12 @@ function saveIdp(req, res) {
 
   const tx = db.transaction(() => {
     // رأس الخطة
-    db.prepare(`INSERT INTO idps (employee_id, approved, approved_by, approved_at, needs_branch_approval, branch_approved_at, edit_unlocked, edit_unlocked_row, certificate, updated_at)
-      VALUES (@employee_id,@approved,@approved_by,@approved_at,@needs_branch_approval,@branch_approved_at,@edit_unlocked,@edit_unlocked_row,@certificate,datetime('now'))
+    db.prepare(`INSERT INTO idps (employee_id, approved, approved_by, approved_at, needs_branch_approval, branch_approved_at, edit_unlocked, edit_unlocked_row, is_final, certificate, updated_at)
+      VALUES (@employee_id,@approved,@approved_by,@approved_at,@needs_branch_approval,@branch_approved_at,@edit_unlocked,@edit_unlocked_row,@is_final,@certificate,datetime('now'))
       ON CONFLICT(employee_id) DO UPDATE SET
         approved=@approved, approved_by=@approved_by, approved_at=@approved_at,
         needs_branch_approval=@needs_branch_approval, branch_approved_at=@branch_approved_at,
-        edit_unlocked=@edit_unlocked, edit_unlocked_row=@edit_unlocked_row, certificate=@certificate, updated_at=datetime('now')`)
+        edit_unlocked=@edit_unlocked, edit_unlocked_row=@edit_unlocked_row, is_final=@is_final, certificate=@certificate, updated_at=datetime('now')`)
       .run({
         employee_id: empId,
         approved: b.approved ? 1 : 0,
@@ -68,6 +68,7 @@ function saveIdp(req, res) {
         branch_approved_at: b.branchApprovedAt || null,
         edit_unlocked: b.editUnlocked ? 1 : 0,
         edit_unlocked_row: b.editUnlockedRow || null,
+        is_final: b.isFinal ? 1 : 0,
         certificate: b.certificate ? JSON.stringify(b.certificate) : null,
       });
 

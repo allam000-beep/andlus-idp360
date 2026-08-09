@@ -27,7 +27,12 @@ const initSharedData = async () => {
   if (sj) { JOB_COMPETENCIES = sj; _activeJobs = sj; }
   if (ss) { _activeSources = ss; }
   if (sm) { _activeCompMap = sm; }
-  if (sw) { _activeWeights = sw; }
+  if (sw) {
+    _activeWeights = sw;
+    // دعم الصيغتين: القديمة (طرف→فئات، للنموذج employee فقط) والجديدة (4 نماذج)
+    if (sw.employee || sw.leader || sw.specialist || sw.branch_ext) applyCustomWeights(sw);
+    else applyCustomWeights({ employee: sw });
+  }
   if (sri) { _compRoleItems = sri; }
 };
 
@@ -56,40 +61,75 @@ const PARTY_CAT_WEIGHTS = new Proxy({}, { get: (_, party) => _activeWeights[part
 // كل نموذج: الأطراف وأوزانها والفئات التي يقيّمها كل طرف.
 // الأطراف الممكنة: self, peer, supervisor, stage_mgr (المدير المباشر), subordinate (المرؤوسون), beneficiary (المستفيدون)
 const EVAL_MODELS = {
-  // النموذج الأول: الموظف (معلم/إداري) — الحالي
+  // اللوحة 1: معلم/إداري/مشرف مختص — أوزان مفصّلة لكل فئة (أساسية/عامة/فنية)
   employee: {
     parties: {
-      self:       { weight: 5,  cats: ["أساسية","عامة","فنية"] },
-      peer:       { weight: 5,  cats: ["أساسية"] },
-      supervisor: { weight: 45, cats: ["عامة","فنية"] },
-      stage_mgr:  { weight: 45, cats: ["أساسية"] },
+      self:       { catWeights: { أساسية:2,  عامة:2,  فنية:1  } },   // مجموع 5
+      peer:       { catWeights: { أساسية:5,  عامة:0,  فنية:0  } },   // مجموع 5
+      supervisor: { catWeights: { أساسية:0,  عامة:30, فنية:15 } },   // مجموع 45
+      stage_mgr:  { catWeights: { أساسية:45, عامة:0,  فنية:0  } },   // مجموع 45
     },
   },
-  // النموذج الثاني: القيادي — ذاتي 5 + مدير مباشر 75 + مرؤوسون 20
+  // اللوحة 2: مدير مرحلة/مجمع/وكيل/مساعد إداري/مدير إدارة وظيفية/إدارة تنفيذية
   leader: {
     parties: {
-      self:        { weight: 5,  cats: ["أساسية","عامة","فنية"] },
-      stage_mgr:   { weight: 75, cats: ["أساسية","عامة","فنية"] },
-      subordinate: { weight: 20, cats: ["عامة"] },   // بنود يحدّدها مدير النظام (د-6)
+      self:        { catWeights: { أساسية:2,  عامة:2,  فنية:1  } },  // 5
+      stage_mgr:   { catWeights: { أساسية:25, عامة:25, فنية:25 } },  // 75
+      subordinate: { catWeights: { أساسية:10, عامة:5,  فنية:5  } },  // 20
     },
   },
-  // النموذج الثالث: الامتداد الفني — ذاتي 5 + متابع فني 40 + مدير مباشر 45 + مستفيدون 10
+  // اللوحة 4: امتداد فني لإدارة وظيفية — ذاتي 5 + متابع فني 40 + مدير مباشر 45 + مستفيدون 10
   branch_ext: {
     parties: {
-      self:        { weight: 5,  cats: ["أساسية","عامة","فنية"] },
-      supervisor:  { weight: 40, cats: ["فنية"] },
-      stage_mgr:   { weight: 45, cats: ["أساسية","عامة"] },
-      beneficiary: { weight: 10, cats: ["عامة"] },
+      self:        { catWeights: { أساسية:2,   عامة:2,   فنية:1   } }, // 5
+      supervisor:  { catWeights: { أساسية:0,   عامة:0,   فنية:40  } }, // 40
+      stage_mgr:   { catWeights: { أساسية:25,  عامة:20,  فنية:0   } }, // 45
+      beneficiary: { catWeights: { أساسية:5,   عامة:2.5, فنية:2.5 } }, // 10
     },
   },
-  // النموذج الرابع: الأخصائي — ذاتي 5 + مدير مباشر 80 + مستفيدون 15
+  // اللوحة 3: أخصائي إدارة وظيفية — ذاتي 5 + مدير مباشر 80 + مستفيدون 15
   specialist: {
     parties: {
-      self:        { weight: 5,  cats: ["أساسية","عامة","فنية"] },
-      stage_mgr:   { weight: 80, cats: ["أساسية","عامة","فنية"] },
-      beneficiary: { weight: 15, cats: ["عامة"] },
+      self:        { catWeights: { أساسية:2,  عامة:2,  فنية:1  } },  // 5
+      stage_mgr:   { catWeights: { أساسية:30, عامة:25, فنية:25 } },  // 80
+      beneficiary: { catWeights: { أساسية:7,  عامة:4,  فنية:4  } },  // 15
     },
   },
+};
+// مشتقّ للتوافق: قائمة الفئات التي يقيّمها كل طرف (وزنها > 0)
+Object.values(EVAL_MODELS).forEach(m => {
+  Object.values(m.parties).forEach(p => {
+    p.cats = Object.entries(p.catWeights).filter(([,w])=>w>0).map(([c])=>c);
+    p.weight = Object.values(p.catWeights).reduce((s,w)=>s+w,0);
+  });
+});
+// نسخة افتراضية للاسترجاع
+const DEFAULT_EVAL_MODELS = JSON.parse(JSON.stringify(EVAL_MODELS));
+// تطبيق أوزان مخصّصة (من مدير النظام) على النماذج الأربعة
+// الشكل: { employee: { self:{أساسية,عامة,فنية}, ... }, leader:{...}, ... }
+const applyCustomWeights = (cw) => {
+  if (!cw) return;
+  Object.entries(cw).forEach(([modelKey, parties]) => {
+    if (!EVAL_MODELS[modelKey]) return;
+    Object.entries(parties||{}).forEach(([party, catW]) => {
+      if (!EVAL_MODELS[modelKey].parties[party]) return;
+      EVAL_MODELS[modelKey].parties[party].catWeights = { ...catW };
+    });
+    // نعيد اشتقاق cats وweight
+    Object.values(EVAL_MODELS[modelKey].parties).forEach(p => {
+      p.cats = Object.entries(p.catWeights).filter(([,w])=>w>0).map(([c])=>c);
+      p.weight = Object.values(p.catWeights).reduce((s,w)=>s+(Number(w)||0),0);
+    });
+  });
+};
+// تصدير الأوزان الحالية بشكل قابل للتحرير (4 نماذج)
+const exportModelWeights = () => {
+  const out = {};
+  Object.entries(EVAL_MODELS).forEach(([mk,m]) => {
+    out[mk] = {};
+    Object.entries(m.parties).forEach(([party,def]) => { out[mk][party] = { ...def.catWeights }; });
+  });
+  return out;
 };
 
 // يحدّد نموذج التقييم حسب دور الموظف
@@ -357,11 +397,12 @@ const calcWeightedComp = (compKey, empEval, roleOrUser) => {
   const cat = getCat(compKey);
   const model = EVAL_MODELS[getEvalModel(roleOrUser)] || EVAL_MODELS.employee;
   let totalW=0, totalScore=0;
-  // نمرّ على أطراف النموذج التي تقيّم فئة هذه الجدارة
+  // نمرّ على أطراف النموذج، ونستخدم وزن الطرف لهذه الفئة تحديداً (catWeights)
   Object.entries(model.parties).forEach(([party,def]) => {
-  if (!(def.cats||[]).includes(cat)) return;
+  const w = def.catWeights ? (def.catWeights[cat]||0) : ((def.cats||[]).includes(cat) ? def.weight : 0);
+  if (w<=0) return;
   const s = calcCompScore(compKey, empEval?.[party]?.[compKey]);
-  if (s!==null) { totalScore += s*def.weight; totalW += def.weight; }
+  if (s!==null) { totalScore += s*w; totalW += w; }
   });
   return totalW>0 ? {score:totalScore/totalW, totalW} : null;
 };
@@ -651,7 +692,7 @@ function groupStats(empList, evals) {
   return{groupAvg,stdDev,partyCompletion,partyAvgScores,levelDist,ranked,compAvgs,total:empList.length,withData:avgs.length,allAvgs:avgs};
 }
 
-function EvalStatusBoard({ emps, evals, locks }) {
+function EvalStatusBoard({ emps, evals, locks, onOpenCard }) {
   const partyState = (u, pk) => {
   if (locks && locks[`${u.id}__${pk}`]) return "done";
   const pe = (evals[u.id]||{})[pk]||{};
@@ -684,7 +725,10 @@ function EvalStatusBoard({ emps, evals, locks }) {
    return (
    <tr key={u.id} style={{background:ri%2===0?"#FFFFFF":"#F7FAFE"}}>
   <td style={{position:"sticky",right:0,background:ri%2===0?"#FFFFFF":"#F7FAFE",padding:"9px 12px",fontWeight:700,color:"#15385C",borderBottom:"1px solid #EDF4FC",whiteSpace:"nowrap"}}>
-  {u.name}<div style={{fontSize:9,color:"#8CA3BD",fontWeight:400}}>{u.job}</div>
+  {onOpenCard
+   ? <button onClick={()=>onOpenCard(u)} style={{background:"none",border:"none",padding:0,color:"#2E7FB8",fontWeight:700,fontSize:11,cursor:"pointer",textDecoration:"underline",textAlign:"right"}}>{u.name} 👁️</button>
+   : u.name}
+  <div style={{fontSize:9,color:"#8CA3BD",fontWeight:400}}>{u.job}</div>
   </td>
   {states.map((s,ci)=>{
   const m=stMeta[s];
@@ -1066,7 +1110,7 @@ function LoginScreen({ onLogin }) {
   <p style={{color:"#8CA3BD",fontSize:12,marginBottom:26,fontWeight:500,textAlign:"center"}}>أدخل بريدك (اسم المستخدم) ليصلك رابط إعادة التعيين</p>
   <div style={{textAlign:"right",marginBottom:14}}>
    <label style={{fontSize:11,color:"#5B7A9E",fontWeight:800,display:"block",marginBottom:6}}>📧 البريد الإلكتروني</label>
-   <input value={fEmail} type="email" onChange={e=>setFEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submitForgot()} placeholder="name@andalus.edu.sa"
+   <input value={fEmail} type="email" onChange={e=>setFEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submitForgot()} placeholder="name@as.edu.sa"
    style={{width:"100%",padding:"13px 14px",background:"#F4F9FE",border:"1.5px solid #DDE9F5",borderRadius:16,color:"#15385C",fontSize:13,fontWeight:600,boxSizing:"border-box",outline:"none"}}/>
   </div>
   {fMsg&&<div style={{color:fMsg.c,fontSize:12,marginBottom:12,background:`${fMsg.c}12`,borderRadius:14,padding:"10px 14px",border:`1px solid ${fMsg.c}30`,fontWeight:700,textAlign:"center",lineHeight:1.7}}>{fMsg.t}</div>}
@@ -1637,7 +1681,7 @@ function CompetenciesEditor({ comps, jobs, onSaveComps, onSaveJobs, onReset, rol
   );
 }
 
-function ResultsReadingSection({ targetUser, currentUser, readings, onSave }) {
+function ResultsReadingSection({ targetUser, currentUser, readings, onSave, resultsApproved = false }) {
   if (!currentUser || !targetUser) return null;
   const empReadings = (readings||{})[targetUser.id] || [];
   const alreadyRead = empReadings.find(r => r.readerId === currentUser.id);
@@ -1686,7 +1730,11 @@ function ResultsReadingSection({ targetUser, currentUser, readings, onSave }) {
   لم يتم تسجيل أي قراءة للنتائج بعد
   </div>
    )}
-   {canRead && (
+   {!resultsApproved ? (
+  <div style={{fontSize:11,color:"#94A3B8",background:"#F1F5F9",border:"1px solid #E2E8F0",borderRadius:10,padding:"10px 14px",textAlign:"center",fontWeight:600}}>
+  🔒 تُتاح قراءة النتائج بعد اكتمال التقييمات واعتماد نتائج المرحلة
+  </div>
+   ) : canRead && (
   alreadyRead ? (
   <div style={{display:"flex",alignItems:"center",gap:10,background:"#10B98112",border:"1px solid #10B98130",borderRadius:10,padding:"10px 16px"}}>
    <span style={{fontSize:20}}>✅</span>
@@ -1706,7 +1754,7 @@ function ResultsReadingSection({ targetUser, currentUser, readings, onSave }) {
   );
 }
 
-function Card360({ targetUser, empEval, onSaveIdp, idpData, onClose, readings, onSaveReadings, currentUser, hidePrint, allEvals, allUsers, impactData = {} }) {
+function Card360({ targetUser, empEval, onSaveIdp, idpData, onClose, readings, onSaveReadings, currentUser, hidePrint, allEvals, allUsers, impactData = {}, approvals = {} }) {
   const [tab,setTab] = useState("scores");
   // إصلاح: نعرض فقط أطراف التقييم الفعلية لدور هذا الموظف (لا كل الأطراف)
   const roleParties = partiesForRole(targetUser);
@@ -2265,15 +2313,20 @@ function Card360({ targetUser, empEval, onSaveIdp, idpData, onClose, readings, o
   );
   })()}
 
-  {/* قراءة النتائج */}
-  {readings && currentUser && (
+  {/* قراءة النتائج — لا تُتاح إلا بعد اعتماد نتائج المرحلة (بدء مرحلة القراءة) */}
+  {readings && currentUser && (()=>{
+   const stageKey = `${targetUser.branch}__${targetUser.stage}__eval`;
+   const resultsApproved = !!(approvals && approvals[stageKey] && approvals[stageKey].approved);
+   return (
   <ResultsReadingSection
    targetUser={targetUser}
    currentUser={currentUser}
    readings={readings}
    onSave={onSaveReadings}
+   resultsApproved={resultsApproved}
   />
-  )}
+   );
+  })()}
    </div>
   </div>
   );
@@ -2288,7 +2341,23 @@ function RequestAccountForm({ user, onSubmit }) {
   const [f,setF] = useState({ name:"", username:"", nationalId:"", password:"", role:"employee", roleSubtype:"", job:"", stage:"", branch: myBranches[0]||"" });
   const set = (k,v) => setF(p=>({...p,[k]:v}));
   const subtypes = ROLE_SUBTYPES[f.role] ? Object.entries(ROLE_SUBTYPES[f.role]) : [];
-  const canSubmit = f.name.trim() && f.username.trim() && f.password.trim() && f.role && f.branch;
+  // تحقّق صيغة البريد الإلكتروني (اسم المستخدم = البريد الفعلي)
+  const emailOk = /^[^\s@]+@as\.edu\.sa$/i.test(f.username.trim());
+  const nationalIdOk = /^\d{10}$/.test(String(f.nationalId).trim());
+  // الحقول الإلزامية: الاسم، البريد (صالح)، كلمة المرور، رقم الهوية (10 أرقام)، المسمّى الوظيفي، الدور، الفرع، والمرحلة (للفروع لا الإدارات)
+  const stageRequired = !scopeIsDept;
+  const missing = [];
+  if (!f.name.trim())     missing.push("الاسم الكامل");
+  if (!f.username.trim()) missing.push("البريد الإلكتروني");
+  else if (!emailOk)      missing.push("بريد بدومين @as.edu.sa (مثل name@as.edu.sa)");
+  if (!f.password.trim()) missing.push("كلمة المرور المبدئية");
+  if (!String(f.nationalId).trim()) missing.push("رقم الهوية");
+  else if (!nationalIdOk) missing.push("رقم هوية صحيح (10 أرقام)");
+  if (!f.job)             missing.push("المسمّى الوظيفي");
+  if (!f.role)            missing.push("الدور");
+  if (!f.branch)          missing.push(scopeWord);
+  if (stageRequired && !f.stage) missing.push("المرحلة");
+  const canSubmit = missing.length===0;
   const iS = {width:"100%",padding:"9px 11px",background:"#F4F9FE",border:"1px solid #DDE9F5",borderRadius:9,color:"#15385C",fontSize:12,boxSizing:"border-box"};
   const lS = {display:"block",fontSize:11,color:"#5B7A9E",marginBottom:4,fontWeight:700};
   // الأدوار المتاحة للطلب (لا مدير نظام)
@@ -2309,9 +2378,11 @@ function RequestAccountForm({ user, onSubmit }) {
    </div>
    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
    <div><label style={lS}>الاسم الكامل *</label><input value={f.name} onChange={e=>set("name",e.target.value)} style={iS}/></div>
-   <div><label style={lS}>📧 البريد (اسم المستخدم) *</label><input value={f.username} onChange={e=>set("username",e.target.value)} placeholder="name@andalus.edu.sa" style={iS}/></div>
-   <div><label style={lS}>🪪 رقم الهوية</label><input value={f.nationalId} onChange={e=>set("nationalId",e.target.value)} style={iS}/></div>
-   <div><label style={lS}>المسمّى الوظيفي</label>
+   <div><label style={lS}>📧 البريد (اسم المستخدم) *</label><input value={f.username} onChange={e=>set("username",e.target.value)} placeholder="name@as.edu.sa" style={{...iS,border:`1px solid ${!f.username.trim()?"#DDE9F5":emailOk?"#10B98160":"#EF444460"}`}}/>
+   {f.username.trim()&&!emailOk&&<div style={{fontSize:9,color:"#EF4444",marginTop:3}}>⚠️ يجب أن يكون البريد بدومين @as.edu.sa (مثال: name@as.edu.sa)</div>}</div>
+   <div><label style={lS}>🪪 رقم الهوية *</label><input value={f.nationalId} onChange={e=>set("nationalId",e.target.value.replace(/\D/g,"").slice(0,10))} inputMode="numeric" placeholder="10 أرقام" style={{...iS,border:`1px solid ${!String(f.nationalId).trim()?"#DDE9F5":nationalIdOk?"#10B98160":"#EF444460"}`}}/>
+   {String(f.nationalId).trim()&&!nationalIdOk&&<div style={{fontSize:9,color:"#EF4444",marginTop:3}}>⚠️ رقم الهوية يجب أن يكون 10 أرقام</div>}</div>
+   <div><label style={lS}>المسمّى الوظيفي *</label>
    <select value={f.job} onChange={e=>set("job",e.target.value)} style={iS}>
    <option value="">— اختر المسمّى —</option>
    {jobOpts.map(j=><option key={j} value={j}>{j}</option>)}
@@ -2328,7 +2399,7 @@ function RequestAccountForm({ user, onSubmit }) {
    {subtypes.map(([k,v])=><option key={k} value={k}>{v}</option>)}
    </select></div>
    )}
-    {!scopeIsDept&&<div><label style={lS}>المرحلة</label>
+    {!scopeIsDept&&<div><label style={lS}>المرحلة *</label>
     <select value={f.stage} onChange={e=>set("stage",e.target.value)} style={iS}>
     <option value="">— اختر المرحلة —</option>
     {STAGES.map(s=><option key={s} value={s}>{s}</option>)}
@@ -2339,6 +2410,11 @@ function RequestAccountForm({ user, onSubmit }) {
    : <input value={f.branch} readOnly style={{...iS,background:"#EDF4FC",color:"#8CA3BD"}}/>}
    </div>
    </div>
+   {!canSubmit&&missing.length>0&&(
+   <div style={{marginTop:12,background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:10,padding:"9px 12px",fontSize:11,color:"#B91C1C",lineHeight:1.7}}>
+   ⚠️ لإرسال الطلب، استكمل: {missing.join("، ")}
+   </div>
+   )}
    <button onClick={()=>{ if(canSubmit){ onSubmit({...f}); setF({name:"",username:"",nationalId:"",password:"",role:"employee",roleSubtype:"",job:"",stage:"",branch:myBranches[0]||""}); } }}
    disabled={!canSubmit} style={{width:"100%",marginTop:14,padding:"12px",borderRadius:12,border:"none",background:canSubmit?"linear-gradient(135deg,#DB2777,#EC4899)":"#CBD5E1",color:"#fff",fontWeight:700,fontSize:13,cursor:canSubmit?"pointer":"not-allowed"}}>📨 إرسال الطلب لمدير النظام</button>
   </div>
@@ -2388,7 +2464,7 @@ function BranchManagerPanel({ user, onLogout }) {
   st.getShared("customComps_360c").then(d=>{ if(d){ setActiveComps(d); COMPETENCIES_WITH_ITEMS=d; } });
   st.getShared("profCerts_360c").then(d=>{ if(d&&d.length){ setProfCerts(d); } });
   st.getShared("customJobs_360c").then(d=>{ if(d){ setActiveJobs(d); JOB_COMPETENCIES=d; } });
-  st.getShared("customWeights_360c").then(d=>{ if(d){ setActiveWeights(d); } });
+  st.getShared("customWeights_360c").then(d=>{ if(d){ setActiveWeights(d); if(d.employee||d.leader||d.specialist||d.branch_ext) applyCustomWeights(d); else applyCustomWeights({employee:d}); } });
   st.getShared("customSources_360c").then(d=>{ if(d){ setActiveSources(d); } });
   st.getShared("customSourceMap_360c").then(d=>{ if(d){ setActiveCompMap(d); } });
   setTimeout(()=>setUsersState(u=>[...u]), 300);
@@ -2730,12 +2806,12 @@ function BranchManagerPanel({ user, onLogout }) {
 
   {/* ═══ خطتي وتقييمي (د-7) ═══ */}
   {tab==="mine"&&(
-  <MyPlanAndEval user={user} idps={idps} evals={evals} impactData={impactData} readings={readings} locks={locks} setLocks={setLocks}
+  <MyPlanAndEval user={user} idps={idps} evals={evals} impactData={impactData} readings={readings} locks={locks} setLocks={setLocks} evalWinData={evalWinData}
    onSaveIdp={saveMyIdp} onSaveSelfEval={saveMySelfEval} onSaveReadings={async d=>{setReadings(d);await st.set("readings_360c",d);}} showToast={showToast}/>
   )}
    </main>
 
-   {viewUser&&<Card360 targetUser={viewUser} empEval={evals[viewUser.id]||{}} idpData={idps[viewUser.id]} readings={readings} onSaveReadings={async d=>{setReadings(d);await st.set("readings_360c",d);}} currentUser={user} allEvals={evals} allUsers={users} onClose={()=>setViewUser(null)}/>}
+   {viewUser&&<Card360 targetUser={viewUser} empEval={evals[viewUser.id]||{}} idpData={idps[viewUser.id]} readings={readings} onSaveReadings={async d=>{setReadings(d);await st.set("readings_360c",d);}} currentUser={user} allEvals={evals} allUsers={users} approvals={approvals} onClose={()=>setViewUser(null)}/>}
 
    {viewPlanUser&&(
    <div onClick={()=>setViewPlanUser(null)} style={{position:"fixed",inset:0,background:"rgba(15,56,92,0.55)",zIndex:1000,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"30px 16px",overflowY:"auto"}}>
@@ -3212,59 +3288,100 @@ function StatCard({ label, value, color, sub, icon }) {
 }
 
 function WeightsEditor({ onSaved }) {
-  const [w,setW] = useState(()=>JSON.parse(JSON.stringify(getActiveWeights())));
-  const [dirty,setDirty] = useState(false);
   const cats = ["أساسية","عامة","فنية"];
-  const partyTotal = (pk)=>cats.reduce((s,c)=>s+(Number(w[pk]?.[c])||0),0);
-  const grand = EVAL_PARTIES.reduce((s,p)=>s+partyTotal(p.key),0);
-  const setVal = (pk,cat,v)=>{
-  const n=Math.max(0,Math.min(100,Number(v)||0));
-  setW(p=>({...p,[pk]:{...(p[pk]||{}),[cat]:n}})); setDirty(true);
+  // النماذج الأربعة وعناوينها وأطرافها (بالترتيب المطلوب)
+  const MODELS = [
+    { key:"employee",   title:"معلم / إداري / مشرف مختص",
+      parties:["self","peer","supervisor","stage_mgr"] },
+    { key:"leader",     title:"مدير مرحلة / مدير مجمع / وكيل / مساعد إداري / مدير إدارة وظيفية / إدارة تنفيذية",
+      parties:["self","stage_mgr","subordinate"] },
+    { key:"specialist", title:"أخصائي إدارة وظيفية",
+      parties:["self","stage_mgr","beneficiary"] },
+    { key:"branch_ext", title:"امتداد فني لإدارة وظيفية",
+      parties:["self","supervisor","stage_mgr","beneficiary"] },
+  ];
+  const PARTY_META = {
+    self:        { icon:"👤", label:"التقييم الذاتي",  color:"#10B981" },
+    peer:        { icon:"👥", label:"زملاء التخصص",    color:"#8B5CF6" },
+    supervisor:  { icon:"🔍", label:"المتابع الفني",   color:"#3B82F6" },
+    stage_mgr:   { icon:"🏛️", label:"المدير المباشر",  color:"#F97316" },
+    subordinate: { icon:"⬆️", label:"المرؤوسون",       color:"#0EA5E9" },
+    beneficiary: { icon:"🎯", label:"المستفيدون",       color:"#EC4899" },
   };
+  const [data,setData] = useState(()=>exportModelWeights());
+  const [dirty,setDirty] = useState(false);
+
+  const partyTotal = (mk,pk)=>cats.reduce((s,c)=>s+(Number(data[mk]?.[pk]?.[c])||0),0);
+  const modelTotal = (m)=>m.parties.reduce((s,pk)=>s+partyTotal(m.key,pk),0);
+  const setVal = (mk,pk,cat,v)=>{
+   const n=Math.max(0,Math.min(100,Number(v)||0));
+   setData(p=>({...p,[mk]:{...(p[mk]||{}),[pk]:{...((p[mk]||{})[pk]||{}),[cat]:n}}})); setDirty(true);
+  };
+  const allValid = MODELS.every(m=>modelTotal(m)===100);
   const save = async()=>{
-  setActiveWeights(w); await st.setShared("customWeights_360c",w);
-  setDirty(false); onSaved&&onSaved();
+   applyCustomWeights(data);
+   setActiveWeights(data);
+   await st.setShared("customWeights_360c",data);
+   setDirty(false); onSaved&&onSaved();
   };
-  const reset = ()=>{ setW(JSON.parse(JSON.stringify(getActiveWeights()))); setDirty(false); };
+  const reset = ()=>{ setData(exportModelWeights()); setDirty(false); };
+  const CAT_COLORS = {"أساسية":"#2E7FB8","عامة":"#8B5CF6","فنية":"#F97316"};
+
   return(
   <div>
-   <div style={{fontSize:11,color:"#5B7A9E",background:"#EFF6FE",borderRadius:8,padding:"8px 12px",marginBottom:12,lineHeight:1.7}}>
-  عدّل وزن كل طرف في كل فئة جدارات. المجموع الكلي يجب أن يساوي <strong>100%</strong>. عند غياب طرف في تقييم موظف، يُحذف وزنه من المقام تلقائياً.
+   <div style={{fontSize:11,color:"#5B7A9E",background:"#EFF6FE",borderRadius:8,padding:"8px 12px",marginBottom:14,lineHeight:1.7}}>
+  عدّل وزن كل طرف في كل فئة، لكل نموذج تقييم على حدة. مجموع كل لوحة يجب أن يساوي <strong>100%</strong>. عمود «عامة/إدارية/قيادية» يمثّل فئة الجدارات العامة. عند غياب طرف في تقييم فعلي، يُحذف وزنه من المقام تلقائياً.
+   </div>
+
+   {MODELS.map(m=>{
+   const mt=modelTotal(m);
+   return(
+   <div key={m.key} style={{marginBottom:18,border:`1px solid ${mt===100?"#C7DBF0":"#F59E0B60"}`,borderRadius:14,overflow:"hidden"}}>
+   <div style={{background:mt===100?"#F4F9FE":"#FFFBEB",padding:"10px 14px",fontSize:13,fontWeight:800,color:"#15385C",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+   <span>{m.title}</span>
+   <span style={{fontFamily:MONO,fontWeight:900,color:mt===100?"#10B981":"#F59E0B"}}>{mt}% {mt===100?"✓":"⚠"}</span>
    </div>
    <div style={{overflowX:"auto"}}>
-  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:420}}>
-  <thead><tr style={{background:"#EFF6FE"}}>
-   <th style={{padding:"8px 10px",textAlign:"right",color:"#15385C",fontWeight:800,borderBottom:"1px solid #C7DBF0"}}>الطرف</th>
-   {cats.map(c=><th key={c} style={{padding:"8px 10px",color:CAT_COLORS[c],fontWeight:800,borderBottom:"1px solid #C7DBF0"}}>{c}</th>)}
-   <th style={{padding:"8px 10px",color:"#5B7A9E",fontWeight:800,borderBottom:"1px solid #C7DBF0"}}>المجموع</th>
-  </tr></thead>
-  <tbody>
-   {EVAL_PARTIES.map(p=>{
-   const t=partyTotal(p.key);
-   return(
-  <tr key={p.key} style={{borderBottom:"1px solid #DDE9F5"}}>
-  <td style={{padding:"8px 10px",color:p.color,fontWeight:700,whiteSpace:"nowrap"}}>{p.icon} {p.label}</td>
-  {cats.map(c=>(
-  <td key={c} style={{padding:"6px 8px",textAlign:"center"}}>
-  <input type="number" min="0" max="100" value={w[p.key]?.[c]??0} onChange={e=>setVal(p.key,c,e.target.value)}
-   style={{width:58,padding:"6px",background:"#F4F9FE",border:"1px solid #C7DBF0",borderRadius:7,color:"#15385C",fontFamily:MONO,fontSize:12,textAlign:"center"}}/>
-  </td>
-  ))}
-  <td style={{padding:"8px 10px",textAlign:"center",color:p.color,fontWeight:900,fontFamily:MONO}}>{t}%</td>
-  </tr>
+   <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:420}}>
+   <thead><tr style={{background:"#FAFCFF"}}>
+   <th style={{padding:"7px 10px",textAlign:"right",color:"#15385C",fontWeight:800,borderBottom:"1px solid #DDE9F5"}}>الطرف</th>
+   <th style={{padding:"7px 10px",color:CAT_COLORS["أساسية"],fontWeight:800,borderBottom:"1px solid #DDE9F5"}}>أساسية</th>
+   <th style={{padding:"7px 10px",color:CAT_COLORS["عامة"],fontWeight:800,borderBottom:"1px solid #DDE9F5"}}>عامة/إدارية/قيادية</th>
+   <th style={{padding:"7px 10px",color:CAT_COLORS["فنية"],fontWeight:800,borderBottom:"1px solid #DDE9F5"}}>فنية</th>
+   <th style={{padding:"7px 10px",color:"#5B7A9E",fontWeight:800,borderBottom:"1px solid #DDE9F5"}}>المجموع</th>
+   </tr></thead>
+   <tbody>
+   {m.parties.map(pk=>{
+    const meta=PARTY_META[pk]||{icon:"",label:pk,color:"#334155"};
+    const t=partyTotal(m.key,pk);
+    return(
+    <tr key={pk} style={{borderBottom:"1px solid #EEF4FB"}}>
+    <td style={{padding:"7px 10px",color:meta.color,fontWeight:700,whiteSpace:"nowrap"}}>{meta.icon} {meta.label}</td>
+    {cats.map(c=>(
+    <td key={c} style={{padding:"5px 8px",textAlign:"center"}}>
+    <input type="number" min="0" max="100" step="0.5" value={data[m.key]?.[pk]?.[c]??0} onChange={e=>setVal(m.key,pk,c,e.target.value)}
+     style={{width:56,padding:"6px",background:"#F4F9FE",border:"1px solid #C7DBF0",borderRadius:7,color:"#15385C",fontFamily:MONO,fontSize:12,textAlign:"center"}}/>
+    </td>
+    ))}
+    <td style={{padding:"7px 10px",textAlign:"center",color:meta.color,fontWeight:900,fontFamily:MONO}}>{t}%</td>
+    </tr>
+    );
+   })}
+   </tbody>
+   </table>
+   </div>
+   </div>
    );
    })}
-  </tbody>
-  </table>
-   </div>
-   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:12,flexWrap:"wrap",gap:10}}>
-  <div style={{fontSize:13,fontWeight:900,color:grand===100?"#10B981":"#EF4444"}}>
-  المجموع الكلي: <span style={{fontFamily:MONO}}>{grand}%</span> {grand===100?"✓":`(يجب أن يكون 100%)`}
+
+   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8,flexWrap:"wrap",gap:10,position:"sticky",bottom:0,background:"#fff",padding:"8px 0"}}>
+  <div style={{fontSize:12,fontWeight:800,color:allValid?"#10B981":"#EF4444"}}>
+  {allValid?"✓ كل اللوحات متوازنة (100%)":"⚠ بعض اللوحات لا تساوي 100%"}
   </div>
   <div style={{display:"flex",gap:8}}>
   {dirty&&<button onClick={reset} style={{padding:"8px 16px",borderRadius:10,border:"1px solid #DDE9F5",background:"#fff",color:"#5B7A9E",fontSize:12,cursor:"pointer"}}>تراجع</button>}
-  <button onClick={save} disabled={!dirty||grand!==100}
-   style={{padding:"8px 20px",borderRadius:10,border:"none",background:(dirty&&grand===100)?"linear-gradient(135deg,#6D28D9,#8B5CF6)":"#DDE9F5",color:(dirty&&grand===100)?"#fff":"#8CA3BD",fontSize:12,fontWeight:800,cursor:(dirty&&grand===100)?"pointer":"not-allowed"}}>
+  <button onClick={save} disabled={!dirty||!allValid}
+   style={{padding:"8px 20px",borderRadius:10,border:"none",background:(dirty&&allValid)?"linear-gradient(135deg,#6D28D9,#8B5CF6)":"#DDE9F5",color:(dirty&&allValid)?"#fff":"#8CA3BD",fontSize:12,fontWeight:800,cursor:(dirty&&allValid)?"pointer":"not-allowed"}}>
    💾 حفظ الأوزان
   </button>
   </div>
@@ -3273,7 +3390,7 @@ function WeightsEditor({ onSaved }) {
   );
 }
 
-function ExecEvalReport({ users, evals, approvals, locks }) {
+function ExecEvalReport({ users, evals, approvals, locks, onOpenCard }) {
   const [selBranch,setSelBranch] = useState("");
   const emps = (users||[]).filter(u=>u.role==="employee");
   const branches = [...new Set(emps.map(u=>u.branch).filter(Boolean))].sort();
@@ -3356,7 +3473,7 @@ function ExecEvalReport({ users, evals, approvals, locks }) {
    return(
   <details key={k} style={{background:"#F7FAFE",border:"1px solid #E3EEF9",borderRadius:16,marginBottom:8,overflow:"hidden"}}>
   <summary style={{padding:"12px 16px",cursor:"pointer",fontSize:12,fontWeight:800,color:"#2E7FB8",listStyle:"none"}}>🏛️ {br} — 📚 {stg} <span style={{color:"#8CA3BD",fontWeight:400}}>({grp[k].length})</span></summary>
-  <div style={{padding:"0 14px 14px"}}><EvalStatusBoard emps={grp[k]} evals={evals} locks={locks}/></div>
+  <div style={{padding:"0 14px 14px"}}><EvalStatusBoard emps={grp[k]} evals={evals} locks={locks} onOpenCard={onOpenCard}/></div>
   </details>
    );
    })}
@@ -3367,7 +3484,7 @@ function ExecEvalReport({ users, evals, approvals, locks }) {
   );
 }
 
-function ExecGrowthReport({ users, idps, approvals, impactData }) {
+function ExecGrowthReport({ users, idps, approvals, impactData, onOpenPlan }) {
   const [sub,setSub] = useState("report"); // report | courses
   const [selBranch,setSelBranch] = useState("");
   const [courses,setCourses] = useState({});
@@ -3495,6 +3612,42 @@ function ExecGrowthReport({ users, idps, approvals, impactData }) {
    {data.brRank.map(x=><BarRow key={x.b} label={x.b} sub={`(${x.plans} خطة)`} value={x.pct} max={100} color={x.pct>=70?"#10B981":x.pct>=40?"#F59E0B":"#EF4444"}/>)}
    </div>
   )}
+
+  {/* استعراض منظّم لخطط التطور — حسب الفرع والمرحلة (لمدير النظام بجوار التقرير) */}
+  {onOpenPlan&&(()=>{
+   const withPlans = scope.filter(u=>(idps[u.id]?.plan||[]).length>0);
+   if(withPlans.length===0) return null;
+   const byBr = {};
+   withPlans.forEach(u=>{ const b=u.branch||"—"; (byBr[b]=byBr[b]||[]).push(u); });
+   return (
+   <div style={{marginTop:16,borderTop:"2px solid #E3EEF9",paddingTop:16}}>
+   <div style={{fontSize:14,fontWeight:900,color:"#15385C",marginBottom:4}}>📋 استعراض خطط التطور المهني</div>
+   <div style={{fontSize:11,color:"#8CA3BD",marginBottom:12}}>اطّلاع منظّم على خطة أي موظف حسب الفرع والمرحلة</div>
+   {Object.entries(byBr).sort().map(([br,list])=>(
+   <details key={br} style={{marginBottom:8,border:"1px solid #E3EEF9",borderRadius:12,overflow:"hidden"}}>
+   <summary style={{padding:"10px 14px",cursor:"pointer",fontSize:12,fontWeight:800,color:"#2E7FB8",background:"#F7FBFF",listStyle:"none"}}>🏛️ {br} <span style={{color:"#8CA3BD",fontWeight:600}}>({list.length} خطة)</span></summary>
+   <div style={{padding:"6px 10px"}}>
+   {list.sort((a,b)=>(a.stage||"").localeCompare(b.stage||"")).map(u=>{
+    const plan=idps[u.id]||{}; const rows=plan.plan||[];
+    const approved=plan.approved; const isFinal=plan.isFinal;
+    const st=approved?{l:"معتمدة",c:"#10B981"}:isFinal?{l:"بانتظار الاعتماد",c:"#F59E0B"}:{l:"مسودّة",c:"#94A3B8"};
+    return(
+    <div key={u.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",borderBottom:"1px solid #EEF4FB",flexWrap:"wrap"}}>
+    <div style={{flex:1,minWidth:140}}>
+    <div style={{fontSize:12,fontWeight:700,color:"#15385C"}}>{u.name}</div>
+    <div style={{fontSize:10,color:"#8CA3BD"}}>{u.job}{u.stage?` • ${u.stage}`:""} • {rows.length} بند</div>
+    </div>
+    <span style={{fontSize:9,color:st.c,background:`${st.c}12`,padding:"2px 8px",borderRadius:10,fontWeight:700}}>{st.l}</span>
+    <button onClick={()=>onOpenPlan(u)} style={{padding:"5px 12px",borderRadius:8,border:"1px solid #3B82F640",background:"#3B82F612",color:"#3B82F6",fontSize:11,cursor:"pointer",fontWeight:700}}>👁️ عرض الخطة</button>
+    </div>
+    );
+   })}
+   </div>
+   </details>
+   ))}
+   </div>
+   );
+  })()}
   </div>
    )}
 
@@ -3569,6 +3722,38 @@ function ExecGrowthReport({ users, idps, approvals, impactData }) {
   ))}
   </div>
    )}
+  {onOpenPlan && (()=>{
+   const withPlans = scope.filter(u=>idps[u.id]?.plan?.length);
+   const byBr = {};
+   withPlans.forEach(u=>{ (byBr[u.branch]=byBr[u.branch]||[]).push(u); });
+   const brs = Object.keys(byBr).sort();
+   if(!brs.length) return null;
+   return (
+   <div style={{marginTop:16}}>
+   <div style={{fontSize:14,fontWeight:900,color:"#15385C",marginBottom:12}}>📋 استعراض خطط التطوّر المهني (حسب الفرع)</div>
+   {brs.map(br=>(
+   <details key={br} style={{background:"#F7FAFE",border:"1px solid #E3EEF9",borderRadius:16,marginBottom:8,overflow:"hidden"}}>
+   <summary style={{padding:"12px 16px",cursor:"pointer",fontSize:12,fontWeight:800,color:"#2E7FB8",listStyle:"none"}}>🏛️ {br} <span style={{color:"#8CA3BD",fontWeight:400}}>({byBr[br].length} خطة)</span></summary>
+   <div style={{padding:"0 14px 14px",display:"flex",flexDirection:"column",gap:6}}>
+   {byBr[br].map(u=>{
+    const p=idps[u.id]||{};
+    const st_ = p.approved?{l:"معتمدة",c:"#10B981"}:p.isFinal?{l:"بانتظار الاعتماد",c:"#F59E0B"}:{l:"مسودّة",c:"#94A3B8"};
+    return(
+    <div key={u.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,background:"#fff",border:"1px solid #E3EEF9",borderRadius:10,padding:"9px 12px",flexWrap:"wrap"}}>
+    <div><span style={{fontWeight:700,fontSize:12,color:"#15385C"}}>{u.name}</span><span style={{fontSize:10,color:"#8CA3BD",marginRight:8}}>{u.job}{u.stage?` • ${u.stage}`:""}</span></div>
+    <div style={{display:"flex",gap:8,alignItems:"center"}}>
+    <span style={{fontSize:10,color:st_.c,background:`${st_.c}12`,padding:"2px 10px",borderRadius:10,fontWeight:700}}>{st_.l} • {p.plan.length} بند</span>
+    <button onClick={()=>onOpenPlan(u)} style={{padding:"5px 12px",borderRadius:8,border:"1px solid #3B82F640",background:"#3B82F612",color:"#3B82F6",fontSize:11,cursor:"pointer",fontWeight:700}}>👁️ عرض الخطة</button>
+    </div>
+    </div>
+    );
+   })}
+   </div>
+   </details>
+   ))}
+   </div>
+   );
+  })()}
   </div>
   );
 }
@@ -3582,6 +3767,7 @@ function AdminPanel({ onLogout }) {
   const [form,setForm] = useState({name:"",username:"",password:"",role:"employee",job:"",branch:"",stage:"",nationalId:"",supervisorId:"",stageManagerId:"",peerId:""});
   const [toast,setToast] = useState(null);
   const [viewUser,setViewUser] = useState(null);
+  const [viewPlanUser,setViewPlanUser] = useState(null);
   const [editUser,setEditUser] = useState(null);
   const [delConfirm,setDelConfirm] = useState(null);
   const [uSearch,setUSearch] = useState("");
@@ -3602,6 +3788,7 @@ function AdminPanel({ onLogout }) {
   const showToast = (msg,c="#10B981") => { setToast({msg,c}); setTimeout(()=>setToast(null),2500); };
 
   useEffect(()=>{
+  const loadData = ()=>{
   st.get("users_360c").then(u=>setUsersState(u||[]));
   st.get("evals_360c").then(d=>setEvalsState(d||{}));
   st.get("idps_360c").then(d=>setIdpsState(d||{}));
@@ -3612,9 +3799,15 @@ function AdminPanel({ onLogout }) {
   st.getShared("customComps_360c").then(d=>{ if(d){ setCustomComps(d); setActiveComps(d); COMPETENCIES_WITH_ITEMS=d; } });
   st.getShared("profCerts_360c").then(d=>{ if(d&&d.length){ setProfCerts(d); } });
   st.getShared("customJobs_360c").then(d=>{ if(d){ setCustomJobs(d); setActiveJobs(d); JOB_COMPETENCIES=d; } });
-  st.getShared("customWeights_360c").then(d=>{ if(d){ setCustomWeights(d); setActiveWeights(d); } });
+  st.getShared("customWeights_360c").then(d=>{ if(d){ setCustomWeights(d); setActiveWeights(d); if(d.employee||d.leader||d.specialist||d.branch_ext) applyCustomWeights(d); else applyCustomWeights({employee:d}); } });
   st.getShared("customSources_360c").then(d=>{ if(d){ setActiveSources(d); } });
   st.getShared("customSourceMap_360c").then(d=>{ if(d){ setActiveCompMap(d); } });
+  };
+  loadData();
+  const onFocus=()=>loadData();
+  window.addEventListener("focus",onFocus);
+  const iv=setInterval(loadData,25000);
+  return ()=>{ window.removeEventListener("focus",onFocus); clearInterval(iv); };
   },[]);
 
   const persistUsers = async u => { setUsersState(u); await st.set("users_360c",u); };
@@ -3625,11 +3818,16 @@ function AdminPanel({ onLogout }) {
 
   const addUser = async () => {
   if (!form.name||!form.username||!form.password||!form.branch) return;
+  if (!/^[^\s@]+@as\.edu\.sa$/i.test(String(form.username).trim())) { showToast("البريد يجب أن يكون بدومين @as.edu.sa","#EF4444"); return; }
+  if (form.nationalId && !/^\d{10}$/.test(String(form.nationalId).trim())) { showToast("رقم الهوية يجب أن يكون 10 أرقام","#EF4444"); return; }
   if ((users||[]).find(u=>u.username===form.username)) { showToast("اسم المستخدم موجود","#EF4444"); return; }
   const newUser = {...form,id:Date.now().toString(),peerIds:form.peerIds||(form.peerId?[form.peerId]:[])};
   try {
    if (typeof window.andlusAPI?.createUser === "function") await window.andlusAPI.createUser(newUser);
    await persistUsers([...(users||[]),newUser]);
+   // نعيد قراءة المستخدمين من الخادم فوراً حتى تظهر بياناته (وجداراته حسب مسمّاه) بلا انتظار
+   const fresh = await st.get("users_360c");
+   if (Array.isArray(fresh)) setUsersState(fresh);
   } catch(e){ showToast("تعذّر إنشاء الحساب: "+(e?.message||"خطأ"),"#EF4444"); return; }
   setForm({name:"",username:"",password:"",role:"employee",job:"",branch:"",stage:"",nationalId:"",supervisorId:"",stageManagerId:"",peerId:""});
   showToast("✓ تم إنشاء الحساب");
@@ -3985,11 +4183,11 @@ function AdminPanel({ onLogout }) {
    </details>
 
    {/* ب) التقرير التنفيذي */}
-   <ExecEvalReport users={users||[]} evals={evals} approvals={approvals} locks={locks}/>
+   <ExecEvalReport users={users||[]} evals={evals} approvals={approvals} locks={locks} onOpenCard={(u)=>setViewUser(u)}/>
   </div>
   )}
   {tab==="report"&&(
-  <ExecGrowthReport users={users||[]} idps={idps} approvals={approvals} impactData={{}}/>
+  <ExecGrowthReport users={users||[]} idps={idps} approvals={approvals} impactData={{}} onOpenPlan={(u)=>setViewPlanUser(u)}/>
   )}
   {tab==="library"&&(<>
   <LibraryManager
@@ -4016,6 +4214,18 @@ function AdminPanel({ onLogout }) {
    </main>
 
    {viewUser&&<Card360 targetUser={viewUser} empEval={evals[viewUser.id]||{}} idpData={idps[viewUser.id]} onSaveIdp={async d=>{const ni={...idps,[viewUser.id]:d};setIdpsState(ni);await st.set("idps_360c",ni);}} readings={readings} onSaveReadings={async d=>{setReadings(d);await st.set("readings_360c",d);}} currentUser={{id:"__admin__",name:"مدير النظام",role:"admin"}} onClose={()=>setViewUser(null)}/>}
+
+   {viewPlanUser&&(
+   <div onClick={()=>setViewPlanUser(null)} style={{position:"fixed",inset:0,background:"rgba(15,56,92,0.55)",zIndex:1000,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"30px 16px",overflowY:"auto"}}>
+   <div onClick={e=>e.stopPropagation()} style={{background:"#F7FBFF",borderRadius:20,maxWidth:900,width:"100%",padding:"20px",boxShadow:"0 24px 60px rgba(0,0,0,0.3)"}}>
+   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+   <div><div style={{fontSize:16,fontWeight:900,color:"#15385C"}}>📋 خطة التطوّر المهني — {viewPlanUser.name}</div><div style={{fontSize:11,color:"#8CA3BD"}}>{viewPlanUser.job}{viewPlanUser.stage?` • ${viewPlanUser.stage}`:""}{viewPlanUser.branch?` • ${viewPlanUser.branch}`:""}</div></div>
+   <button onClick={()=>setViewPlanUser(null)} style={{background:"none",border:"none",fontSize:22,color:"#5B7A9E",cursor:"pointer"}}>✕</button>
+   </div>
+   <EmployeeGrowthPlan user={viewPlanUser} empEval={evals[viewPlanUser.id]||{}} idpData={idps[viewPlanUser.id]} onSave={()=>{}} viewerRole="viewer" impactData={{}} minHours={getEvalModel(viewPlanUser)==="leader"?15:12}/>
+   </div>
+   </div>
+   )}
 
    {editUser&&(
   <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:400,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
@@ -4272,7 +4482,8 @@ function SupervisorTeamGrowth({ myTargets, idps, evals, editRequests, approvals,
   {/* أزرار الإجراءات */}
   <div style={{display:"flex",gap:8,flexWrap:"wrap",margin:"14px 0"}}>
   <button onClick={()=>onOpenPlan(u)} style={{padding:"7px 14px",borderRadius:8,border:"1px solid #3B82F640",background:"#3B82F612",color:"#3B82F6",fontSize:11,cursor:"pointer",fontWeight:700}}>👁️ عرض الخطة كاملة</button>
-  {!approved&&<button onClick={()=>approve(u.id)} style={{padding:"7px 14px",borderRadius:8,border:"none",background:"linear-gradient(135deg,#059669,#10B981)",color:"#fff",fontSize:11,cursor:"pointer",fontWeight:700}}>✅ اعتماد الخطة</button>}
+  {!approved&&plan.isFinal&&<button onClick={()=>approve(u.id)} style={{padding:"7px 14px",borderRadius:8,border:"none",background:"linear-gradient(135deg,#059669,#10B981)",color:"#fff",fontSize:11,cursor:"pointer",fontWeight:700}}>✅ اعتماد الخطة</button>}
+  {!approved&&!plan.isFinal&&<span style={{padding:"7px 14px",borderRadius:8,background:"#F1F5F9",border:"1px solid #E2E8F0",color:"#94A3B8",fontSize:11,fontWeight:700}} title="لم يُنهِ الموظف التخطيط بعد (في مرحلة الحفظ المؤقت)">⏳ بانتظار إغلاق الموظف للتخطيط</span>}
   {approved&&(!req||req.status!=="pending")&&<button onClick={()=>setEditModal({emp:u,rows})} style={{padding:"7px 14px",borderRadius:8,border:"1px solid #F59E0B40",background:"#F59E0B12",color:"#F59E0B",fontSize:11,cursor:"pointer",fontWeight:700}}>✏️ طلب تعديل بند (بديل)</button>}
   </div>
 
@@ -4388,7 +4599,7 @@ function LeaderPlanApprovals({ user, users, idps, impactData, readings, onApprov
     if (t.id===user.id) return false;
     if (getEvalModel(t)!=="leader" && t.role!=="branch_ext" && t.role!=="specialist") return false;
     const approver = getPlanApprover(t, users);
-    return approver && approver.id===user.id && idps[t.id]?.plan?.length;
+    return approver && approver.id===user.id && idps[t.id]?.plan?.length && idps[t.id]?.isFinal;
   });
   if (!pending.length) return null;
   return (
@@ -4416,7 +4627,7 @@ function LeaderPlanApprovals({ user, users, idps, impactData, readings, onApprov
 
 // مكوّن قابل لإعادة الاستخدام: تبويبا "خطتي المهنية" و"تقييم أدائي" للمديرين (د-7)
 // ساعات الخطة للمديرين = 15. التقييم يستخدم نموذج الدور تلقائياً (د-4).
-function MyPlanAndEval({ user, idps, evals, impactData, readings, locks, setLocks, onSaveIdp, onSaveSelfEval, onSaveReadings, showToast }) {
+function MyPlanAndEval({ user, idps, evals, impactData, readings, locks, setLocks, onSaveIdp, onSaveSelfEval, onSaveReadings, showToast, evalWinData = {branches:{}} }) {
   const [subTab,setSubTab] = useState("plan"); // plan | eval
   const [cardOpen,setCardOpen] = useState(false);
   const [selfTarget,setSelfTarget] = useState(null);
@@ -4476,11 +4687,16 @@ function MyPlanAndEval({ user, idps, evals, impactData, readings, locks, setLock
    );
    })}
    </div>
-   {!selfLocked ? (
-   <button onClick={()=>setSelfTarget(user)} style={{width:"100%",padding:"12px",borderRadius:12,border:selfDone?"1px solid #10B98140":"none",background:selfDone?"#10B98115":"linear-gradient(135deg,#059669,#10B981)",color:selfDone?"#10B981":"#fff",fontWeight:700,fontSize:13,cursor:"pointer"}}>{selfDone?"✏️ تعديل تقييمي الذاتي":"📝 ابدأ تقييمي الذاتي"}</button>
-   ) : (
-   <div style={{padding:"12px",borderRadius:12,background:"#EF444410",border:"2px solid #EF444430",color:"#EF4444",fontWeight:700,fontSize:13,textAlign:"center"}}>🔒 التقييم الذاتي مقفول</div>
-   )}
+   {(()=>{
+   const winSt = branchWindowStatus(evalWinData, user.branch);
+   if (selfLocked) return <div style={{padding:"12px",borderRadius:12,background:"#EF444410",border:"2px solid #EF444430",color:"#EF4444",fontWeight:700,fontSize:13,textAlign:"center"}}>🔒 التقييم الذاتي مقفول</div>;
+   return (<>
+   <div style={{marginBottom:8,textAlign:"center"}}><span style={{fontSize:11,color:winSt.color,background:`${winSt.color}12`,padding:"3px 12px",borderRadius:12,fontWeight:700}}>{winSt.icon} حالة تقييم فرعك: {winSt.label}</span></div>
+   {winSt.open
+   ? <button onClick={()=>setSelfTarget(user)} style={{width:"100%",padding:"12px",borderRadius:12,border:selfDone?"1px solid #10B98140":"none",background:selfDone?"#10B98115":"linear-gradient(135deg,#059669,#10B981)",color:selfDone?"#10B981":"#fff",fontWeight:700,fontSize:13,cursor:"pointer"}}>{selfDone?"✏️ تعديل تقييمي الذاتي":"📝 ابدأ تقييمي الذاتي"}</button>
+   : <div style={{padding:"12px",borderRadius:12,background:"#F1F5F9",border:"2px solid #E2E8F0",color:"#94A3B8",fontWeight:700,fontSize:13,textAlign:"center"}}>🔒 التقييم مغلق — لا يمكن {selfDone?"التعديل":"البدء"}</div>}
+   </>);
+   })()}
    </div>
    )}
 
@@ -4513,6 +4729,7 @@ function StageManagerPanel({ user, onLogout }) {
   const hasSupervisor = (u) => (users||[]).some(s=>s.role==="supervisor" && getEvaluators(u,users).some(e=>e.id===s.id));
 
   useEffect(()=>{
+  const loadData = ()=>{
   st.get("users_360c").then(u=>setUsersState(u||[]));
   st.get("evalwindow_360c").then(w=>setEvalWinData(w||{branches:{}}));
   st.get("evals_360c").then(d=>setEvalsState(d||{}));
@@ -4525,10 +4742,17 @@ function StageManagerPanel({ user, onLogout }) {
   st.getShared("customComps_360c").then(d=>{ if(d){ setActiveComps(d); COMPETENCIES_WITH_ITEMS=d; } });
   st.getShared("profCerts_360c").then(d=>{ if(d&&d.length){ setProfCerts(d); } });
   st.getShared("customJobs_360c").then(d=>{ if(d){ setActiveJobs(d); JOB_COMPETENCIES=d; } });
-  st.getShared("customWeights_360c").then(d=>{ if(d){ setActiveWeights(d); } });
+  st.getShared("customWeights_360c").then(d=>{ if(d){ setActiveWeights(d); if(d.employee||d.leader||d.specialist||d.branch_ext) applyCustomWeights(d); else applyCustomWeights({employee:d}); } });
   st.getShared("customSources_360c").then(d=>{ if(d){ setActiveSources(d); } });
   st.getShared("customSourceMap_360c").then(d=>{ if(d){ setActiveCompMap(d); } });
+  };
+  loadData();
   setTimeout(()=>setUsersState(u=>[...u]), 300);
+  // تحديث شبه لحظي عند النشر: عند عودة التركيز للصفحة + كل 25 ثانية
+  const onFocus = ()=>loadData();
+  window.addEventListener("focus", onFocus);
+  const iv = setInterval(loadData, 25000);
+  return ()=>{ window.removeEventListener("focus", onFocus); clearInterval(iv); };
   },[]);
 
   const myStages = scopeStages(user);
@@ -4781,12 +5005,12 @@ function StageManagerPanel({ user, onLogout }) {
 
   {/* ═══ التبويب 3: خطتي وتقييمي (د-7) ═══ */}
   {tab==="mine"&&(
-  <MyPlanAndEval user={user} idps={idps} evals={evals} impactData={impactData} readings={readings} locks={locks} setLocks={setLocks}
+  <MyPlanAndEval user={user} idps={idps} evals={evals} impactData={impactData} readings={readings} locks={locks} setLocks={setLocks} evalWinData={evalWinData}
    onSaveIdp={saveMyIdp} onSaveSelfEval={saveMySelfEval} onSaveReadings={async d=>{setReadings(d);await st.set("readings_360c",d);}} showToast={showToast}/>
   )}
    </main>
 
-   {viewTarget&&<Card360 targetUser={viewTarget} empEval={evals[viewTarget.id]||{}} idpData={idps[viewTarget.id]} readings={readings} onSaveReadings={async d=>{setReadings(d);await st.set("readings_360c",d);}} currentUser={user} allEvals={evals} allUsers={users} onClose={()=>setViewTarget(null)}/>}
+   {viewTarget&&<Card360 targetUser={viewTarget} empEval={evals[viewTarget.id]||{}} idpData={idps[viewTarget.id]} readings={readings} onSaveReadings={async d=>{setReadings(d);await st.set("readings_360c",d);}} currentUser={user} allEvals={evals} allUsers={users} approvals={approvals} onClose={()=>setViewTarget(null)}/>}
    {evalTarget&&<EvalForm partyKey={partyKey} targetUser={evalTarget} existingScores={readPartyScore(evals[evalTarget.id]||{},partyKey,evalTarget.id)} onSave={scores=>saveEval(evalTarget.id,scores)} onCancel={()=>setEvalTarget(null)} locks={locks} onLock={async(key)=>{const nl={...(locks||{}),[key]:{lockedAt:new Date().toISOString()}};setLocks(nl);await st.set('locks_360c',nl);}}/>}
   </div>
   );
@@ -4821,6 +5045,7 @@ function EvaluatorPanel({ user, partyKey, onLogout }) {
   };
 
   useEffect(()=>{
+  const loadData = ()=>{
   st.get("users_360c").then(u=>setUsersState(u||[]));
   st.get("evalwindow_360c").then(w=>setEvalWinData(w||{branches:{}}));
   st.get("evals_360c").then(d=>setEvalsState(d||{}));
@@ -4836,10 +5061,16 @@ function EvaluatorPanel({ user, partyKey, onLogout }) {
   st.getShared("customComps_360c").then(d=>{ if(d){ setActiveComps(d); COMPETENCIES_WITH_ITEMS=d; } });
   st.getShared("profCerts_360c").then(d=>{ if(d&&d.length){ setProfCerts(d); } });
   st.getShared("customJobs_360c").then(d=>{ if(d){ setActiveJobs(d); JOB_COMPETENCIES=d; } });
-  st.getShared("customWeights_360c").then(d=>{ if(d){ setActiveWeights(d); } });
+  st.getShared("customWeights_360c").then(d=>{ if(d){ setActiveWeights(d); if(d.employee||d.leader||d.specialist||d.branch_ext) applyCustomWeights(d); else applyCustomWeights({employee:d}); } });
   st.getShared("customSources_360c").then(d=>{ if(d){ setActiveSources(d); } });
   st.getShared("customSourceMap_360c").then(d=>{ if(d){ setActiveCompMap(d); } });
   setTimeout(()=>setUsersState(u=>[...u]), 300);
+  };
+  loadData();
+  const onFocus=()=>loadData();
+  window.addEventListener("focus",onFocus);
+  const iv=setInterval(loadData,25000);
+  return ()=>{ window.removeEventListener("focus",onFocus); clearInterval(iv); };
   },[]);
 
   const myTargets = (users||[]).filter(u=>{
@@ -4980,15 +5211,19 @@ function EvaluatorPanel({ user, partyKey, onLogout }) {
    {(()=>{
    const selfDone = Object.keys(myEmpEval.self||{}).length>0;
    const selfLocked = !!(locks && locks[`${user.id}__self`]);
+   const winSt = branchWindowStatus(evalWinData, user.branch);
    return(
   <div style={{background:"#10B9810D",border:"1px solid #10B98125",borderRadius:12,padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
   <div>
   <div style={{fontSize:13,fontWeight:800,color:"#10B981"}}>👤 التقييم الذاتي</div>
   <div style={{fontSize:11,color:"#5B7A9E",marginTop:2}}>قيّم نفسك في جداراتك (أساسية + عامة + فنية)</div>
+  <div style={{marginTop:4}}><span style={{fontSize:10,color:winSt.color,background:`${winSt.color}12`,padding:"2px 10px",borderRadius:10,fontWeight:700}}>{winSt.icon} حالة تقييم فرعك: {winSt.label}</span></div>
   </div>
   {selfLocked
   ? <span style={{padding:"7px 16px",borderRadius:10,background:"#EF444410",border:"1px solid #EF444430",color:"#EF4444",fontSize:12,fontWeight:700}}>🔒 مقفول</span>
-  : <button onClick={()=>setSelfTarget(user)} style={{padding:"10px 20px",borderRadius:22,border:selfDone?"1px solid #10B98140":"none",background:selfDone?"#10B98115":"linear-gradient(135deg,#059669,#10B981)",color:selfDone?"#10B981":"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>{selfDone?"✏️ تعديل تقييمي الذاتي":"▶ ابدأ تقييمي الذاتي"}</button>}
+  : winSt.open
+  ? <button onClick={()=>setSelfTarget(user)} style={{padding:"10px 20px",borderRadius:22,border:selfDone?"1px solid #10B98140":"none",background:selfDone?"#10B98115":"linear-gradient(135deg,#059669,#10B981)",color:selfDone?"#10B981":"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>{selfDone?"✏️ تعديل تقييمي الذاتي":"▶ ابدأ تقييمي الذاتي"}</button>
+  : <span style={{padding:"7px 16px",borderRadius:10,background:"#F1F5F9",border:"1px solid #E2E8F0",color:"#94A3B8",fontSize:12,fontWeight:700}} title={selfDone?"التقييم مغلق — لا يمكن التعديل":"التقييم مغلق"}>🔒 التقييم مغلق{selfDone?" (مكتمل)":""}</span>}
   </div>
    );
    })()}
@@ -5184,6 +5419,8 @@ function EmployeeGrowthPlan({ user, empEval, idpData, onSave, viewerRole, impact
   const [approvedAt,setApprovedAt] = useState(idpData?.approvedAt||"");
   // د-9: الشهادة الاحترافية
   const [cert,setCert] = useState(idpData?.certificate||null); // {name, isOther, status}
+  const [intCourseData,setIntCourseData] = useState({}); // بيانات الدورات الحضورية من إدارة التدريب
+  useEffect(()=>{ st.get("intcourses_360c").then(d=>setIntCourseData(d||{})); },[]);
   useEffect(()=>{ setCert(idpData?.certificate||null); },[idpData]);
   useEffect(()=>{ setIdpPlan(idpData?.plan||[]); setSelSources(idpData?.selSources||{}); setGoals(idpData?.goals||{}); setApproved(idpData?.approved||false); setApprovedBy(idpData?.approvedBy||""); setApprovedAt(idpData?.approvedAt||""); },[idpData]);
 
@@ -5517,6 +5754,40 @@ function EmployeeGrowthPlan({ user, empEval, idpData, onSave, viewerRole, impact
    </select>
    </div>
   )}
+  {/* بيانات الدورة الحضورية الداخلية من إدارة التدريب (تاريخ/مكان/مدرب) */}
+  {(()=>{
+   const _ms=`${row.trainMethod||""} ${row.method||""} ${row.needSource||""}`;
+   const isInt=_ms.includes("حضورية داخلية")||_ms.includes("داخلي حضوري");
+   if(!isInt) return null;
+   const cname=row.programName||row.comp||"";
+   const cd=intCourseData[`${cname}__${user.id}`]||{};
+   const has=cd.actualDate||cd.location||cd.trainer||cd.status;
+   const pct=cd.attendPct!==undefined&&cd.attendPct!==""?Number(cd.attendPct):null;
+   const certEligible=pct!==null&&pct>CERT_MIN_ATTENDANCE;
+   return(
+   <div style={{marginTop:12,background:"#8B5CF608",border:"1px solid #8B5CF625",borderRadius:10,padding:"10px 12px"}}>
+   <div style={{fontSize:11,fontWeight:800,color:"#7C3AED",marginBottom:has?6:0}}>🏫 تفاصيل الدورة الحضورية من إدارة التدريب</div>
+   {has?(
+   <div style={{display:"flex",flexWrap:"wrap",gap:10,fontSize:11,color:"#15385C"}}>
+   {cd.actualDate&&<span>📅 {cd.actualDate}</span>}
+   {cd.location&&<span>📍 {cd.location}</span>}
+   {cd.trainer&&<span>👨‍🏫 {cd.trainer}</span>}
+   {cd.status&&<span style={{fontWeight:700,color:"#7C3AED"}}>• {cd.status}</span>}
+   {cd.attendPct!=null&&cd.attendPct!==""&&<span>📊 الحضور {cd.attendPct}%</span>}
+   </div>
+   ):(
+   <div style={{fontSize:10,color:"#94A3B8"}}>⏳ لم تُحدَّد تفاصيل التنفيذ بعد — ستصلك من إدارة التدريب</div>
+   )}
+   {certEligible&&(
+   <button onClick={()=>generateAttendanceCertificate({name:user.name,courseName:cname,date:cd.actualDate||"",hours:row.hours||cd.hours||"",trainer:cd.trainer||""})}
+    style={{marginTop:8,padding:"7px 14px",borderRadius:8,border:"none",background:"linear-gradient(135deg,#059669,#10B981)",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer"}}>🎓 تنزيل شهادة الحضور</button>
+   )}
+   {pct!==null&&!certEligible&&(
+   <div style={{marginTop:8,fontSize:10,color:"#94A3B8"}}>🎓 تُتاح شهادة الحضور عند تجاوز نسبة الحضور {CERT_MIN_ATTENDANCE}%</div>
+   )}
+   </div>
+   );
+  })()}
   </div>
   );
   })}
@@ -5641,22 +5912,31 @@ function ExecPanel({ user, onLogout }) {
   const [readings,setReadings] = useState({});
   const [locks,setLocks] = useState({});
   const [viewTarget,setViewTarget] = useState(null);
+  const [evalWinData,setEvalWinData] = useState({branches:{}});
   const [toast,setToast] = useState(null);
   const showToast = (msg,c="#10B981") => { setToast({msg,c}); setTimeout(()=>setToast(null),2000); };
 
   useEffect(()=>{
+  const loadData = ()=>{
   st.get("users_360c").then(u=>setUsersState(u||[]));
   st.get("evals_360c").then(d=>setEvalsState(d||{}));
   st.get("idps_360c").then(d=>setIdpsState(d||{}));
   st.get("impact_360c").then(d=>setImpactData(d||{}));
   st.get("readings_360c").then(d=>setReadings(d||{}));
   st.get("locks_360c").then(d=>setLocks(d||{}));
+  st.get("evalwindow_360c").then(w=>setEvalWinData(w||{branches:{}}));
   st.getShared("customComps_360c").then(d=>{ if(d){ setActiveComps(d); COMPETENCIES_WITH_ITEMS=d; } });
   st.getShared("profCerts_360c").then(d=>{ if(d&&d.length){ setProfCerts(d); } });
   st.getShared("customJobs_360c").then(d=>{ if(d){ setActiveJobs(d); JOB_COMPETENCIES=d; } });
-  st.getShared("customWeights_360c").then(d=>{ if(d){ setActiveWeights(d); } });
+  st.getShared("customWeights_360c").then(d=>{ if(d){ setActiveWeights(d); if(d.employee||d.leader||d.specialist||d.branch_ext) applyCustomWeights(d); else applyCustomWeights({employee:d}); } });
   st.getShared("compRoleItems_360c").then(d=>{ if(d){ setCompRoleItems(d); } });
   setTimeout(()=>setUsersState(u=>[...u]), 300);
+  };
+  loadData();
+  const onFocus=()=>loadData();
+  window.addEventListener("focus",onFocus);
+  const iv=setInterval(loadData,25000);
+  return ()=>{ window.removeEventListener("focus",onFocus); clearInterval(iv); };
   },[]);
 
   const scope = getSummaryScope(user, users);
@@ -5723,11 +6003,11 @@ function ExecPanel({ user, onLogout }) {
    )}
 
    {tab==="mine"&&(
-   <MyPlanAndEval user={user} idps={idps} evals={evals} impactData={impactData} readings={readings} locks={locks} setLocks={setLocks}
+   <MyPlanAndEval user={user} idps={idps} evals={evals} impactData={impactData} readings={readings} locks={locks} setLocks={setLocks} evalWinData={evalWinData}
    onSaveIdp={saveMyIdp} onSaveSelfEval={saveMySelfEval} onSaveReadings={async d=>{setReadings(d);await st.set("readings_360c",d);}} showToast={showToast}/>
    )}
    </main>
-   {viewTarget&&<Card360 targetUser={viewTarget} empEval={evals[viewTarget.id]||{}} idpData={idps[viewTarget.id]} readings={readings} onSaveReadings={async d=>{setReadings(d);await st.set("readings_360c",d);}} currentUser={user} allEvals={evals} allUsers={users} onClose={()=>setViewTarget(null)}/>}
+   {viewTarget&&<Card360 targetUser={viewTarget} empEval={evals[viewTarget.id]||{}} idpData={idps[viewTarget.id]} readings={readings} onSaveReadings={async d=>{setReadings(d);await st.set("readings_360c",d);}} currentUser={user} allEvals={evals} allUsers={users} approvals={approvals} onClose={()=>setViewTarget(null)}/>}
    {toast&&<div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:toast.c,color:"#fff",padding:"10px 22px",borderRadius:24,fontSize:13,fontWeight:700,zIndex:900}}>{toast.msg}</div>}
   </div>
   );
@@ -6010,8 +6290,8 @@ function EmployeePanel({ user, onLogout }) {
    if (selfLocked) return (
    <div style={{flex:1,minWidth:150,padding:"12px",borderRadius:12,background:"#EF444410",border:"2px solid #EF444430",color:"#EF4444",fontWeight:700,fontSize:13,textAlign:"center"}}>🔒 التقييم الذاتي مقفول</div>
    );
-   if (!winOpen && !selfDone) return (
-   <div style={{flex:1,minWidth:150,padding:"12px",borderRadius:12,background:"#F1F5F9",border:"2px solid #E2E8F0",color:"#94A3B8",fontWeight:700,fontSize:13,textAlign:"center"}}>🔒 التقييم مغلق — لا يمكن البدء</div>
+   if (!winOpen) return (
+   <div style={{flex:1,minWidth:150,padding:"12px",borderRadius:12,background:"#F1F5F9",border:"2px solid #E2E8F0",color:"#94A3B8",fontWeight:700,fontSize:13,textAlign:"center"}}>🔒 التقييم مغلق — لا يمكن {selfDone?"التعديل":"البدء"}</div>
    );
    return (
    <button onClick={()=>setSelfTarget(user)} style={{flex:1,minWidth:150,padding:"12px",borderRadius:12,border:selfDone?`1px solid #10B98140`:"none",background:selfDone?"#10B98115":"linear-gradient(135deg,#059669,#10B981)",color:selfDone?"#10B981":"#fff",fontWeight:700,fontSize:13,cursor:"pointer"}}>
@@ -6137,8 +6417,8 @@ function EmployeePanel({ user, onLogout }) {
    {selfTarget&&<EvalForm partyKey="self" targetUser={user} existingScores={readPartyScore(myEval,"self",user.id)} onSave={saveSelfEval} onCancel={()=>setSelfTarget(null)} locks={locks} onLock={async(key)=>{const nl={...(locks||{}),[key]:{lockedAt:new Date().toISOString()}};setLocks(nl);await st.set('locks_360c',nl);}}/>}
    {peerTarget&&<EvalForm partyKey="peer" targetUser={peerTarget} lockKeyOverride={`${peerTarget.id}__peer__${user.id}`} existingScores={(isR2Active(peerTarget.id)?((evals[peerTarget.id]||{}).__r2?.peerRaters?.[user.id]):((evals[peerTarget.id]||{}).peerRaters?.[user.id]))||{}} onSave={scores=>savePeerEval(peerTarget.id,scores)} onCancel={()=>setPeerTarget(null)} locks={locks} onLock={async(key)=>{const nl={...(locks||{}),[key]:{lockedAt:new Date().toISOString()}};setLocks(nl);await st.set('locks_360c',nl);}}/>}
    {roleEvalTarget&&<RoleEvalForm party={roleEvalTarget.party} targetUser={roleEvalTarget.user} existingScores={((evals[roleEvalTarget.user.id]||{})[roleEvalTarget.party+"Raters"]?.[user.id])||{}} onSave={async scores=>{await saveRoleEval(roleEvalTarget.user.id,roleEvalTarget.party,scores);setRoleEvalTarget(null);}} onCancel={()=>setRoleEvalTarget(null)}/>}
-   {viewCard&&<Card360 targetUser={user} empEval={evals[user.id]||{}} idpData={idps[user.id]} onSaveIdp={saveIdp} readings={readings} onSaveReadings={async d=>{setReadings(d);await st.set("readings_360c",d);}} currentUser={user} hidePrint allEvals={evals} allUsers={users} onClose={()=>setViewCard(false)}/>}
-   {teamCardTarget&&<Card360 targetUser={teamCardTarget} empEval={evals[teamCardTarget.id]||{}} idpData={idps[teamCardTarget.id]} readings={readings} onSaveReadings={async d=>{setReadings(d);await st.set("readings_360c",d);}} currentUser={user} allEvals={evals} allUsers={users} onClose={()=>setTeamCardTarget(null)}/>}
+   {viewCard&&<Card360 targetUser={user} empEval={evals[user.id]||{}} idpData={idps[user.id]} onSaveIdp={saveIdp} readings={readings} onSaveReadings={async d=>{setReadings(d);await st.set("readings_360c",d);}} currentUser={user} hidePrint allEvals={evals} allUsers={users} approvals={approvals} onClose={()=>setViewCard(false)}/>}
+   {teamCardTarget&&<Card360 targetUser={teamCardTarget} empEval={evals[teamCardTarget.id]||{}} idpData={idps[teamCardTarget.id]} readings={readings} onSaveReadings={async d=>{setReadings(d);await st.set("readings_360c",d);}} currentUser={user} allEvals={evals} allUsers={users} approvals={approvals} onClose={()=>setTeamCardTarget(null)}/>}
   </div>
   );
 }

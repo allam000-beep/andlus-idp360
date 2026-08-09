@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS idps (
   branch_approved_at    TEXT,
   edit_unlocked         INTEGER DEFAULT 0,
   edit_unlocked_row     TEXT,
+  is_final              INTEGER DEFAULT 0,    -- أنهى الموظف التخطيط (حفظ وإغلاق)
   certificate           TEXT,                -- د-9: الشهادة الاحترافية (JSON)
   updated_at            TEXT DEFAULT (datetime('now'))
 );
