@@ -10,7 +10,7 @@
     "build:ui": "bash scripts/build_ui.sh"
   },
   "engines": {
-    "node": ">=18"
+        "node": "20.x"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
