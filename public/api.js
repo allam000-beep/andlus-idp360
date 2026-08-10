@@ -252,6 +252,9 @@
     customSources_360c: 'sources', customSourceMap_360c: 'sourceMap',
     customWeights_360c: 'weights', compRoleItems_360c: 'compRoleItems',
     profCerts_360c: 'profCerts',
+    // وضع الصيانة: تستدعيه الواجهة، وبدون هذا السطر كانت setShared تخرج صامتة
+    // فتظهر رسالة «حُفظت» بلا حفظ فعلي. الخادم يقبل أي مفتاح إعدادات فلا يلزمه تعديل.
+    maintenanceMode_360c: 'maintenanceMode',
   };
 
   // مسار /settings يُعيد كتلة الإعدادات كاملة (~9KB) لا مفتاحاً واحداً، وكانت

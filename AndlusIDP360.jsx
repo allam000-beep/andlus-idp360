@@ -1051,6 +1051,7 @@ function AdminChangePasswordButton() {
 
 function LoginScreen({ onLogin }) {
   const [u,setU] = useState(""); const [p,setP] = useState(""); const [err,setErr] = useState(false); const [show,setShow] = useState(false);
+  const [maintMsg,setMaintMsg] = useState("");
   const [mode,setMode] = useState("login"); // login | forgot
   const [fEmail,setFEmail] = useState(""); const [fMsg,setFMsg] = useState(null); const [fBusy,setFBusy] = useState(false);
   const submitForgot = async () => {
@@ -1069,6 +1070,9 @@ function LoginScreen({ onLogin }) {
    const adminHash = await getAdminPassHash();
    if (inputHash === adminHash) { onLogin(ADMIN_CREDS); return; }
   }
+  // وضع الصيانة: يمنع دخول غير مدير النظام
+  const maint = await st.getShared("maintenanceMode_360c").catch(()=>null);
+  if (maint && maint.enabled) { setErr(false); setMaintMsg(maint.message||"النظام قيد التحديث، يُرجى المحاولة لاحقاً"); return; }
   const users = await st.get("users_360c") || [];
   const found = users.find(x => x.username === u && x.password === p);
   if (found) onLogin(found); else { setErr(true); setP(""); }
@@ -1138,6 +1142,7 @@ function LoginScreen({ onLogin }) {
   ))}
 
   {err&&<div style={{color:"#EF4444",fontSize:12,marginBottom:12,background:"#EF444412",borderRadius:14,padding:"10px 14px",border:"1px solid #EF444430",fontWeight:700,textAlign:"center"}}>⚠️ بيانات الدخول غير صحيحة</div>}
+  {maintMsg&&<div style={{color:"#B45309",fontSize:13,marginBottom:12,background:"#F59E0B12",borderRadius:14,padding:"12px 16px",border:"1px solid #F59E0B40",fontWeight:700,textAlign:"center",lineHeight:1.7}}>🛠️ {maintMsg}</div>}
 
   <button onClick={login} style={{width:"100%",padding:"14px",borderRadius:24,border:"none",background:"linear-gradient(135deg,#1D5A8A,#2E7FB8 60%,#4FA3D9)",color:"#fff",fontWeight:900,fontSize:15,cursor:"pointer",marginTop:6,boxShadow:"0 10px 26px rgba(46,127,184,0.4)"}}>
    دخول إلى النظام ←
@@ -1907,19 +1912,7 @@ function Card360({ targetUser, empEval, onSaveIdp, idpData, onClose, readings, o
    </div>
    );
   })()}
-  {idpData?.certificate?.name&&isCertEligible(targetUser)&&(
-  <div style={{background:"linear-gradient(135deg,#8B5CF60D,#6D28D908)",border:"1px solid #8B5CF630",borderRadius:12,padding:"10px 14px",marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
-   <span style={{fontSize:20}}>🎖️</span>
-   <div style={{flex:1}}>
-   <div style={{fontSize:10,color:"#7C3AED",fontWeight:700}}>الشهادة الاحترافية المستهدفة{idpData.certificate.category?` • ${idpData.certificate.category}`:""}</div>
-   <div style={{fontSize:13,color:"#15385C",fontWeight:800}}>{idpData.certificate.name}</div>
-   {(idpData.certificate.targetDate||idpData.certificate.cost)&&<div style={{fontSize:10,color:"#8CA3BD",marginTop:1}}>{idpData.certificate.targetDate?`📅 ${idpData.certificate.targetDate}`:""}{idpData.certificate.targetDate&&idpData.certificate.cost?" • ":""}{idpData.certificate.cost?`💰 ${idpData.certificate.cost}`:""}</div>}
-   </div>
-   {(()=>{ const s=idpData.certificate.status||"none"; const col=CERT_STATUS_COLOR[s]; return (
-   <span style={{fontSize:11,fontWeight:800,color:col,background:`${col}15`,padding:"5px 12px",borderRadius:20}}>{s==="earned"?"🏅 ":s==="inprogress"?"⏳ ":"○ "}{CERT_STATUS[s]}</span>
-   );})()}
-  </div>
-  )}
+  {/* الشهادة الاحترافية جزء من خطة التطوّر — تُعرض هناك لا في بطاقة التقييم (تفادياً للخلط) */}
 
   {/* تبويبات — الموظف يجد المصادر والخطة في تبويب "خطة التطور المهني" بلوحته */}
   <div style={{display:"flex",gap:4,marginBottom:14,borderBottom:"1px solid #DDE9F5",paddingBottom:8}}>
@@ -2242,7 +2235,7 @@ function Card360({ targetUser, empEval, onSaveIdp, idpData, onClose, readings, o
   <label style={lS}>🔗 رابط</label>
   <div style={{display:"flex",gap:6}}>
    <input value={F("url")} readOnly={!onSaveIdp} onChange={e=>setF("url",e.target.value)} placeholder="https://..." style={{...iS,flex:1,direction:"ltr"}}/>
-   {F("url")&&<a href={F("url")} target="_blank" rel="noopener noreferrer" style={{padding:"8px 10px",borderRadius:8,background:"#3B82F615",color:"#3B82F6",fontSize:12,textDecoration:"none"}}>🔗</a>}
+   {isValidUrl(F("url"))&&<a href={F("url")} target="_blank" rel="noopener noreferrer" style={{padding:"8px 10px",borderRadius:8,background:"#3B82F615",color:"#3B82F6",fontSize:12,textDecoration:"none"}}>🔗</a>}
   </div>
   </div>
   <div>
@@ -2569,7 +2562,7 @@ function BranchManagerPanel({ user, onLogout }) {
   <div style={{display:"flex",gap:6}}>
    <PrintButton title={`تقرير فرع ${user.branch}`} branch={user.branch}/>
    <ChangePasswordButton userId={user.id} currentPassword={user.password}/>
-   <button onClick={onLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer"}}>خروج</button>
+   <RefreshButton/><button onClick={onLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
   </div>
   </div>
    </header>
@@ -2588,6 +2581,36 @@ function BranchManagerPanel({ user, onLogout }) {
   <div>
    <LeaderPlanApprovals user={user} users={users} idps={idps} impactData={impactData} readings={readings}
    onApprovePlan={approveLeaderPlan} onOpenCard={(t)=>setViewPlanUser(t)}/>
+   {/* قيادات الفرع: متابعة خطط التطور لمدراء المراحل والوكلاء (منفصلين عن الموظفين) */}
+   {branchLeaders.length>0&&(
+   <div style={{background:"#8B5CF608",border:"1px solid #8B5CF625",borderRadius:20,marginTop:14,marginBottom:8,padding:18}}>
+   <div style={{fontSize:15,fontWeight:900,color:"#7C3AED",marginBottom:4}}>🏛️ قيادات الفرع — متابعة التطور المهني</div>
+   <div style={{fontSize:11,color:"#8CA3BD",marginBottom:12}}>مدراء المراحل والوكلاء ({branchLeaders.length}) — للاطّلاع على خططهم.</div>
+   {branchLeaders.map(u=>{
+   const plan=idps[u.id]||{}; const rows=plan.plan||[]; const ap=plan.approved;
+   return(
+   <details key={u.id} style={{background:"#fff",border:`1px solid ${ap?"#10B98125":"#E3EEF9"}`,borderRadius:14,marginBottom:8,overflow:"hidden"}}>
+   <summary style={{padding:"11px 14px",cursor:"pointer",display:"flex",alignItems:"center",gap:12,listStyle:"none"}}>
+   <div style={{width:32,height:32,borderRadius:9,background:ap?"#10B98115":"#F4F9FE",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}}>{ap?"✅":"🎯"}</div>
+   <div style={{flex:1,minWidth:0}}><div style={{fontWeight:700,fontSize:12,color:"#15385C"}}>{u.name}</div><div style={{fontSize:10,color:"#8CA3BD"}}>{ROLES_LIST[u.role]}{u.stage?` • ${u.stage}`:""} • {rows.length} بند</div></div>
+   <span style={{fontSize:10,color:ap?"#10B981":"#F59E0B",background:ap?"#10B98115":"#F59E0B15",padding:"3px 10px",borderRadius:20,fontWeight:700}}>{ap?"معتمدة":plan.isFinal?"بانتظار الاعتماد":"مسودّة"}</span>
+   <button onClick={(e)=>{e.preventDefault();setViewPlanUser(u);}} style={{padding:"5px 12px",borderRadius:8,border:"1px solid #8B5CF640",background:"#8B5CF610",color:"#7C3AED",fontSize:11,cursor:"pointer",fontWeight:700}}>👁️ عرض الخطة</button>
+   </summary>
+   <div style={{padding:"0 14px 12px",borderTop:"1px solid #EEF4FB"}}>
+   {rows.length===0?<div style={{textAlign:"center",padding:14,color:"#8CA3BD",fontSize:12}}>لا خطة بعد</div>:rows.map((r,i)=>{
+   const sc=statusColor[r.status]||"#8CA3BD";
+   return(<div key={r.id} style={{background:"#F4F9FE",border:`1px solid ${sc}25`,borderRadius:10,padding:"9px 12px",marginTop:8}}>
+   <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap"}}>
+   <div style={{flex:1,minWidth:0,fontSize:12,color:"#15385C",fontWeight:700}}>{r.cat?`[${r.cat}] `:""}{r.programName||r.comp||`بند ${i+1}`}</div>
+   <span style={{fontSize:10,color:sc,background:`${sc}15`,padding:"3px 10px",borderRadius:20,fontWeight:700}}>{r.status||"لم يتم"}</span>
+   </div></div>);
+   })}
+   </div>
+   </details>
+   );
+   })}
+   </div>
+   )}
    <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap",marginTop:14}}>
    {[{l:"👥 الموظفون",v:branchEmps.length,c:"#2E7FB8"},{l:"📋 خطط معتمدة فنياً",v:`${growthStats.approved}/${growthStats.plans}`,c:"#10B981"},{l:"⏱️ الساعات",v:growthStats.hours%1===0?growthStats.hours:growthStats.hours.toFixed(1),c:"#0891B2"},{l:"💰 التكلفة",v:growthStats.cost>0?growthStats.cost.toLocaleString("en-US"):"0",c:"#D97706"},{l:"📊 نسبة التنفيذ",v:`${growthStats.execPct}%`,c:"#059669"},{l:"📏 قياس الأثر",v:`${growthStats.impactPct}%`,c:"#8B5CF6"}].map((card,i)=>(
   <div key={i} style={{flex:1,minWidth:110,background:BRAND.cardBg,border:`1px solid ${BRAND.cardBorder}`,borderRadius:20,padding:"16px 18px",boxShadow:"0 8px 26px rgba(46,127,184,0.10)"}}>
@@ -3062,7 +3085,7 @@ function LibraryManager({ onSave }) {
   </div>
   </div>
   <div style={{display:"flex",gap:5,flexShrink:0}}>
-  {s.url&&<a href={s.url} target="_blank" rel="noopener noreferrer" style={{padding:"4px 9px",borderRadius:7,background:"#3B82F612",border:"1px solid #3B82F630",color:"#3B82F6",fontSize:10,textDecoration:"none",fontWeight:700}}>🔗</a>}
+  {isValidUrl(s.url)&&<a href={s.url} target="_blank" rel="noopener noreferrer" style={{padding:"4px 9px",borderRadius:7,background:"#3B82F612",border:"1px solid #3B82F630",color:"#3B82F6",fontSize:10,textDecoration:"none",fontWeight:700}}>🔗</a>}
   <button onClick={()=>setEditRow({...s})} style={{padding:"4px 9px",borderRadius:7,border:"1px solid #3B82F630",background:"#3B82F610",color:"#3B82F6",fontSize:10,cursor:"pointer"}}>تعديل</button>
   <button onClick={()=>deleteRow(s.id)} style={{padding:"4px 9px",borderRadius:7,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:10,cursor:"pointer"}}>حذف</button>
   </div>
@@ -3093,14 +3116,19 @@ function LibraryManager({ onSave }) {
   {isOpen&&(
   <div style={{padding:"0 14px 14px",borderTop:`1px solid ${col}15`}}>
   {sources.length===0&&<div style={{fontSize:11,color:"#5B7A9E",padding:"8px 0"}}>أضف مصادر أولاً من تبويب المصادر</div>}
-  <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:10,maxHeight:280,overflowY:"auto"}}>
+  <div style={{display:"flex",flexDirection:"column",gap:6,marginTop:10,maxHeight:"46vh",overflowY:"auto"}}>
    {sources.map(s=>{
    const lnk=(compMap[cn]||[]).includes(s.name);
    return(
-   <button key={s.id} onClick={()=>toggleLink(cn,s.name)}
-   style={{padding:"6px 12px",borderRadius:18,border:`1px solid ${lnk?col+"60":col+"20"}`,background:lnk?`${col}20`:"transparent",color:lnk?col:"#5B7A9E",fontSize:11,cursor:"pointer",fontWeight:lnk?700:400,maxWidth:"100%",whiteSpace:"normal",textAlign:"right",lineHeight:1.5}}>
-   {lnk?"✓ ":""}{s.type==="كتاب"?"📖":"🎓"} {s.name}
-   </button>
+   <div key={s.id} onClick={()=>toggleLink(cn,s.name)}
+   style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:10,border:`1px solid ${lnk?col+"55":"#E3EEF9"}`,background:lnk?`${col}0E`:"#FBFDFF",cursor:"pointer",transition:"all 0.12s"}}>
+   <div style={{width:22,height:22,borderRadius:6,border:`2px solid ${lnk?col:"#CBD5E1"}`,background:lnk?col:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,color:"#fff",fontSize:13,fontWeight:900}}>{lnk?"✓":""}</div>
+   <span style={{fontSize:15,flexShrink:0}}>{s.type==="كتاب"?"📖":"🎓"}</span>
+   <div style={{flex:1,minWidth:0}}>
+   <div style={{fontSize:12.5,color:lnk?col:"#334155",fontWeight:lnk?700:600,lineHeight:1.5}}>{s.name}</div>
+   {(s.provider||s.hours)&&<div style={{fontSize:10,color:"#8CA3BD",marginTop:1}}>{s.provider||""}{s.provider&&s.hours?" • ":""}{s.hours?`${s.hours} ساعة`:""}</div>}
+   </div>
+   </div>
    );
    })}
   </div>
@@ -3190,6 +3218,24 @@ function LibraryManager({ onSave }) {
 }
 
 const scopeBranches = (u) => (u.branches&&u.branches.length) ? u.branches : (u.branch?[u.branch]:[]);
+// زر تحديث يدوي + عدّاد للتحديث التلقائي (بدل الخروج والدخول)
+function RefreshButton({ intervalSec = 25 }) {
+  const [count, setCount] = React.useState(intervalSec);
+  const [spinning, setSpinning] = React.useState(false);
+  React.useEffect(()=>{
+    const t = setInterval(()=>setCount(c=>c<=1?intervalSec:c-1), 1000);
+    return ()=>clearInterval(t);
+  },[intervalSec]);
+  const doRefresh = ()=>{ setSpinning(true); setTimeout(()=>{ try{ window.location.reload(); }catch(e){} }, 150); };
+  return (
+   <button onClick={doRefresh} title="تحديث البيانات الآن" style={{display:"flex",alignItems:"center",gap:6,padding:"5px 12px",borderRadius:20,border:"1px solid #2E7FB840",background:"#2E7FB810",color:"#2E7FB8",fontSize:11,cursor:"pointer",fontWeight:700}}>
+   <span style={{display:"inline-block",transition:"transform .3s",transform:spinning?"rotate(360deg)":"none"}}>🔄</span>
+   تحديث <span style={{fontSize:9,color:"#8CA3BD",fontFamily:MONO}}>({count})</span>
+   </button>
+  );
+}
+// رابط صالح فقط إن بدأ بـ http/https — يمنع تحويل النصوص (مثل "يصلكم لاحقاً") لمسار داخل النظام
+const isValidUrl = (u) => typeof u==="string" && /^https?:\/\/.+/i.test(u.trim());
 // حالة نافذة تقييم فرع معيّن (تُستخدم في كل اللوحات القيادية لعرض/تعطيل التقييم)
 // win = كائن النوافذ الكامل {branches:{br:{isOpen,openDate,closeDate}}}
 const branchWindowStatus = (win, branch) => {
@@ -3777,6 +3823,7 @@ function AdminPanel({ onLogout }) {
   const [uGroup,setUGroup] = useState(true);
   const [evalWindow,setEvalWindowState] = useState({isOpen:false,openDate:"",closeDate:"",note:""});
   const [round2,setRound2State] = useState({open:false,openDate:"",closeDate:""}); // ب-4: التقييم الثاني
+  const [maintMode,setMaintMode] = useState({enabled:false,message:""}); // وضع الصيانة (تعطيل الدخول)
   const [customComps,setCustomComps] = useState(null);
   const [customRoleItems,setCustomRoleItems] = useState(()=>getCompRoleItems());
   const [customJobs,setCustomJobs] = useState(null);
@@ -3796,6 +3843,7 @@ function AdminPanel({ onLogout }) {
   st.get("evalwindow_360c").then(d=>{ if(d) setEvalWindowState(d); });
   st.get("round2_360c").then(d=>{ if(d) setRound2State(d); });
   st.get("acctRequests_360c").then(d=>setAcctRequests(Array.isArray(d)?d:[]));
+  st.getShared("maintenanceMode_360c").then(d=>{ if(d) setMaintMode({enabled:!!d.enabled,message:d.message||""}); });
   st.getShared("customComps_360c").then(d=>{ if(d){ setCustomComps(d); setActiveComps(d); COMPETENCIES_WITH_ITEMS=d; } });
   st.getShared("profCerts_360c").then(d=>{ if(d&&d.length){ setProfCerts(d); } });
   st.getShared("customJobs_360c").then(d=>{ if(d){ setCustomJobs(d); setActiveJobs(d); JOB_COMPETENCIES=d; } });
@@ -3818,10 +3866,14 @@ function AdminPanel({ onLogout }) {
 
   const addUser = async () => {
   if (!form.name||!form.username||!form.password||!form.branch) return;
-  if (!/^[^\s@]+@as\.edu\.sa$/i.test(String(form.username).trim())) { showToast("البريد يجب أن يكون بدومين @as.edu.sa","#EF4444"); return; }
+  // تطبيع البريد: إزالة المسافات والمحارف الخفية (قد يُدرجها المتصفّح العربي)
+  const cleanUsername = String(form.username).replace(/[\u200B-\u200F\u202A-\u202E\uFEFF]/g,"").trim();
+  if (cleanUsername !== form.username) setForm(p=>({...p,username:cleanUsername}));
+  // مدير النظام معفى من فرض الدومين (مسؤول)، لكن نتحقّق أن البريد بصيغة صحيحة عموماً
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(cleanUsername)) { showToast("صيغة البريد غير صحيحة","#EF4444"); return; }
   if (form.nationalId && !/^\d{10}$/.test(String(form.nationalId).trim())) { showToast("رقم الهوية يجب أن يكون 10 أرقام","#EF4444"); return; }
-  if ((users||[]).find(u=>u.username===form.username)) { showToast("اسم المستخدم موجود","#EF4444"); return; }
-  const newUser = {...form,id:Date.now().toString(),peerIds:form.peerIds||(form.peerId?[form.peerId]:[])};
+  if ((users||[]).find(u=>u.username===cleanUsername)) { showToast("اسم المستخدم موجود","#EF4444"); return; }
+  const newUser = {...form,username:cleanUsername,id:Date.now().toString(),peerIds:form.peerIds||(form.peerId?[form.peerId]:[])};
   try {
    if (typeof window.andlusAPI?.createUser === "function") await window.andlusAPI.createUser(newUser);
    await persistUsers([...(users||[]),newUser]);
@@ -3891,7 +3943,7 @@ function AdminPanel({ onLogout }) {
    ))}
    <PrintButton title="لوحة مدير النظام" branch="جميع الفروع"/>
    <AdminChangePasswordButton/>
-   <button onClick={onLogout} style={{padding:"5px 11px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer"}}>خروج</button>
+   <RefreshButton/><button onClick={onLogout} style={{padding:"5px 11px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
   </div>
   </div>
    </header>
@@ -4096,6 +4148,30 @@ function AdminPanel({ onLogout }) {
 
   {tab==="evals"&&(
   <div style={{display:"flex",flexDirection:"column",gap:10}}>
+   {/* وضع الصيانة: تعطيل دخول جميع الحسابات عدا مدير النظام */}
+   <div style={{background:maintMode.enabled?"#FEF2F2":"#FFFFFF",border:`1px solid ${maintMode.enabled?"#FCA5A5":"#E3EEF9"}`,borderRadius:14,padding:16}}>
+   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:maintMode.enabled?10:0}}>
+   <div>
+   <div style={{fontSize:14,fontWeight:900,color:maintMode.enabled?"#DC2626":"#15385C"}}>🛠️ وضع الصيانة (تعطيل الدخول)</div>
+   <div style={{fontSize:11,color:"#8CA3BD",marginTop:2}}>عند التفعيل، يُمنع دخول جميع الحسابات عدا مدير النظام، مع عرض رسالة «قيد التحديث».</div>
+   </div>
+   <button onClick={async()=>{ const nm={...maintMode,enabled:!maintMode.enabled}; setMaintMode(nm); await st.setShared("maintenanceMode_360c",nm); showToast(nm.enabled?"🛠️ فُعّل وضع الصيانة — الدخول معطّل":"✅ أُلغي وضع الصيانة — الدخول متاح", nm.enabled?"#DC2626":"#10B981"); }}
+    style={{padding:"9px 20px",borderRadius:22,border:"none",background:maintMode.enabled?"linear-gradient(135deg,#DC2626,#EF4444)":"linear-gradient(135deg,#059669,#10B981)",color:"#fff",fontSize:12,fontWeight:800,cursor:"pointer",whiteSpace:"nowrap"}}>
+    {maintMode.enabled?"⏹️ إيقاف وإتاحة الدخول":"▶️ تفعيل وضع الصيانة"}
+   </button>
+   </div>
+   {maintMode.enabled&&(
+   <div>
+   <label style={{fontSize:11,color:"#B45309",fontWeight:700,display:"block",marginBottom:4}}>✍️ رسالة تظهر للمستخدمين وقت الصيانة</label>
+   <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+   <input value={maintMode.message} onChange={e=>setMaintMode({...maintMode,message:e.target.value})} placeholder="مثال: النظام قيد التحديث حتى الساعة 5 مساءً، نعتذر عن الإزعاج"
+    style={{flex:1,minWidth:220,padding:"9px 12px",borderRadius:10,border:"1px solid #FCA5A5",background:"#fff",fontSize:12,color:"#15385C"}}/>
+   <button onClick={async()=>{ await st.setShared("maintenanceMode_360c",maintMode); showToast("✓ حُفظت رسالة الصيانة"); }}
+    style={{padding:"9px 18px",borderRadius:10,border:"none",background:"#DC2626",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>💾 حفظ الرسالة</button>
+   </div>
+   </div>
+   )}
+   </div>
    {/* أ) نوافذ التقييم لكل فرع */}
    {(()=>{
    const today=new Date().toISOString().split("T")[0];
@@ -4266,6 +4342,13 @@ function AdminPanel({ onLogout }) {
   {STAGES.map(s=><option key={s} value={s}>{s}</option>)}
   </select></div>
    )}
+   <div><label style={{display:"block",fontSize:11,color:"#5B7A9E",marginBottom:4,fontWeight:700}}>💼 المسمّى الوظيفي</label>
+  <select value={editUser.job||""} onChange={e=>setEditUser(p=>({...p,job:e.target.value}))}
+  style={{width:"100%",padding:"8px 10px",background:"#F4F9FE",border:"1px solid #DDE9F5",borderRadius:8,color:editUser.job?"#15385C":"#8CA3BD",fontSize:12}}>
+  <option value="">-- اختر المسمّى --</option>
+  {Object.keys(customJobs||getActiveJobs()).map(j=><option key={j} value={j}>{j}</option>)}
+  </select>
+  <div style={{fontSize:9,color:"#8CA3BD",marginTop:3}}>تغيير المسمّى يُحدّث الجدارات المرتبطة بالحساب تلقائياً.</div></div>
    {editUser.role==="branch_mgr"&&(
   <MultiPick label="🏛️ الفروع التابعة له" hint="اختر فرعاً أو أكثر"
   options={BRANCHES_LIST.filter(b=>b!=="-- اختر الفرع --")} selected={editUser.branches} onChange={v=>setEditUser(p=>({...p,branches:v}))}/>
@@ -4391,7 +4474,7 @@ function ImpactMeasure({ row, impact, editable, onSave, planApproved, branchAppr
    {witnesses.map((w,i)=>(
   <div key={i} style={{display:"flex",alignItems:"center",gap:8,background:"#fff",border:"1px solid #EDF4FC",borderRadius:8,padding:"6px 10px"}}>
   <span style={{fontSize:13}}>{wIcon[w.type]||"📎"}</span>
-  <span style={{flex:1,fontSize:11,color:"#15385C",wordBreak:"break-all"}}>{w.type==="رابط"?<a href={w.value} target="_blank" rel="noreferrer" style={{color:"#2E7FB8"}}>{w.value}</a>:w.value}</span>
+  <span style={{flex:1,fontSize:11,color:"#15385C",wordBreak:"break-all"}}>{w.type==="رابط"&&isValidUrl(w.value)?<a href={w.value} target="_blank" rel="noreferrer" style={{color:"#2E7FB8"}}>{w.value}</a>:w.value}</span>
   {editable&&<button onClick={()=>delWitness(i)} style={{background:"none",border:"none",color:"#EF4444",cursor:"pointer",fontSize:14}}>✕</button>}
   </div>
    ))}
@@ -4604,7 +4687,7 @@ function LeaderPlanApprovals({ user, users, idps, impactData, readings, onApprov
   if (!pending.length) return null;
   return (
   <div style={{background:"#FFFFFF",border:"1px solid #8B5CF625",borderRadius:14,padding:16,marginTop:14}}>
-   <div style={{fontSize:13,color:"#7C3AED",fontWeight:800,marginBottom:10}}>📋 اعتماد خطط القياديين التابعين</div>
+   <div style={{fontSize:13,color:"#7C3AED",fontWeight:800,marginBottom:10}}>🏛️ قيادات الفرع — اعتماد خطط التطوّر المهني للقياديين التابعين</div>
    {pending.map(t=>{
    const idp = idps[t.id]; const approved = idp?.approved;
    return (
@@ -4818,7 +4901,7 @@ function StageManagerPanel({ user, onLogout }) {
   <div style={{display:"flex",gap:6}}>
    <PrintButton title={`تقرير المرحلة - ${user.name}`} branch={user.branch}/>
    <ChangePasswordButton userId={user.id} currentPassword={user.password}/>
-   <button onClick={onLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer"}}>خروج</button>
+   <RefreshButton/><button onClick={onLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
   </div>
   </div>
    </header>
@@ -5154,7 +5237,7 @@ function EvaluatorPanel({ user, partyKey, onLogout }) {
   </div>
   <div style={{display:"flex",gap:6}}>
    <ChangePasswordButton userId={user.id} currentPassword={user.password}/>
-   <button onClick={onLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer"}}>خروج</button>
+   <RefreshButton/><button onClick={onLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
   </div>
   </div>
    </header>
@@ -5662,7 +5745,9 @@ function EmployeeGrowthPlan({ user, empEval, idpData, onSave, viewerRole, impact
   {F("trainMethod")&&<span style={{fontSize:10,color:"#8B5CF6",background:"#8B5CF612",padding:"3px 10px",borderRadius:20}}>🎓 {F("trainMethod")}</span>}
   {F("hours")&&<span style={{fontSize:10,color:"#94A3B8",background:"#DDE9F5",padding:"3px 10px",borderRadius:20}}>⏱️ {F("hours")} ساعة</span>}
   <span style={{fontSize:10,color:F("cost")==="مجاني"?"#10B981":"#F59E0B",background:F("cost")==="مجاني"?"#10B98112":"#F59E0B12",padding:"3px 10px",borderRadius:20,fontWeight:700}}>{F("cost")==="مجاني"?"🆓 مجاني":`💰 ${F("cost")} ريال`}</span>
-  {F("url")&&<a href={F("url")} target="_blank" rel="noopener noreferrer" style={{fontSize:10,color:"#3B82F6",background:"#3B82F612",padding:"3px 10px",borderRadius:20,textDecoration:"none",fontWeight:700}}>🔗 فتح الرابط</a>}
+  {isValidUrl(F("url"))
+   ? <a href={F("url")} target="_blank" rel="noopener noreferrer" style={{fontSize:10,color:"#3B82F6",background:"#3B82F612",padding:"3px 10px",borderRadius:20,textDecoration:"none",fontWeight:700}}>🔗 فتح الرابط</a>
+   : F("url")&&<span style={{fontSize:10,color:"#8B5CF6",background:"#8B5CF610",padding:"3px 10px",borderRadius:20,fontWeight:700}}>{F("url")}</span>}
    </div>
    {/* عدد الساعات: قابل للإدخال إن لم تأتِ من المكتبة (يلزم لإكمال التخطيط) */}
    {!F("hours")&&canEditFields&&(
@@ -5718,7 +5803,7 @@ function EmployeeGrowthPlan({ user, empEval, idpData, onSave, viewerRole, impact
    <label style={lS}>🔗 رابط</label>
    <div style={{display:"flex",gap:6}}>
    <input readOnly={!canEditFields} value={F("url")} onChange={e=>setF("url",e.target.value)} placeholder="https://..." style={{...iS,flex:1,direction:"ltr",textAlign:"left"}}/>
-   {F("url")&&<a href={F("url")} target="_blank" rel="noopener noreferrer" style={{padding:"8px 10px",borderRadius:8,background:"#3B82F615",color:"#3B82F6",fontSize:12,textDecoration:"none",display:"flex",alignItems:"center"}}>🔗</a>}
+   {isValidUrl(F("url"))&&<a href={F("url")} target="_blank" rel="noopener noreferrer" style={{padding:"8px 10px",borderRadius:8,background:"#3B82F615",color:"#3B82F6",fontSize:12,textDecoration:"none",display:"flex",alignItems:"center"}}>🔗</a>}
    </div>
    </div>
    <div>
@@ -5844,7 +5929,7 @@ function EmployeeGrowthPlan({ user, empEval, idpData, onSave, viewerRole, impact
    {/* تفاصيل الشهادة المختارة من القائمة */}
    {selCert&&!isOther&&(selCert.url||selCert.cost)&&(
    <div style={{background:"#8B5CF608",border:"1px solid #8B5CF620",borderRadius:8,padding:"8px 12px",fontSize:11,color:"#5B7A9E"}}>
-   {selCert.cost&&<span>💰 التكلفة: {selCert.cost}</span>}{selCert.cost&&selCert.url&&<span> • </span>}{selCert.url&&<a href={selCert.url} target="_blank" rel="noopener" style={{color:"#7C3AED"}}>🔗 تفاصيل الشهادة</a>}
+   {selCert.cost&&<span>💰 التكلفة: {selCert.cost}</span>}{selCert.cost&&selCert.url&&<span> • </span>}{isValidUrl(selCert.url)&&<a href={selCert.url} target="_blank" rel="noopener" style={{color:"#7C3AED"}}>🔗 تفاصيل الشهادة</a>}
    </div>
    )}
    {cert&&(cert.name||isOther)&&(
@@ -5880,7 +5965,7 @@ function EmployeeGrowthPlan({ user, empEval, idpData, onSave, viewerRole, impact
   </div>
   )}
 
-  {idpPlan.length>0&&canEditFields&&(
+  {idpPlan.length>0&&canEditFields&&!approved&&(
    <div style={{marginTop:8}}>
    <div style={{display:"flex",gap:8}}>
    <button onClick={saveDraft} style={{flex:1,padding:"12px",borderRadius:12,border:"1.5px solid #2E7FB8",background:"#2E7FB810",color:"#2E7FB8",fontWeight:700,fontSize:13,cursor:"pointer"}}>💾 حفظ مؤقت</button>
@@ -5896,13 +5981,16 @@ function EmployeeGrowthPlan({ user, empEval, idpData, onSave, viewerRole, impact
    )}
    </div>
   )}
+  {idpPlan.length>0&&approved&&role!=="branch_mgr"&&(
+   <div style={{marginTop:8,background:"#10B9810D",border:"1px solid #10B98130",borderRadius:10,padding:"10px 12px",fontSize:12,color:"#059669",fontWeight:700,textAlign:"center"}}>
+   ✅ خطتك معتمدة ومقفلة — لا يمكن تعديلها. لأي تعديل، اطلب فتحها من المتابع الفني.
+   </div>
+  )}
   </div>
    )}
   </div>
   );
 }
-
-// اللوحة التنفيذية (د-8): ملخّص أداء من تحت القيادي حسب نطاقه + تبويباته الشخصية
 function ExecPanel({ user, onLogout }) {
   const [tab,setTab] = useState("summary"); // summary | mine
   const [users,setUsersState] = useState([]);
@@ -5961,7 +6049,7 @@ function ExecPanel({ user, onLogout }) {
    </div>
    <div style={{display:"flex",gap:6}}>
    <ChangePasswordButton userId={user.id} currentPassword={user.password}/>
-   <button onClick={onLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer"}}>خروج</button>
+   <RefreshButton/><button onClick={onLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
    </div>
    </div>
    </header>
@@ -6102,6 +6190,7 @@ function EmployeePanel({ user, onLogout }) {
   const [selfTarget,setSelfTarget] = useState(null);
   const [peerTarget,setPeerTarget] = useState(null);
   const [roleEvalTarget,setRoleEvalTarget] = useState(null); // {user, party}
+  const [evalWinAll,setEvalWinAll] = useState({branches:{}});
   const [viewCard,setViewCard] = useState(false);
   const [teamCardTarget,setTeamCardTarget] = useState(null); // ملاحظة 9: بطاقة عضو فريق مدير الإدارة
   const [evalWindowData,setEvalWindowData] = useState({isOpen:false});
@@ -6116,9 +6205,9 @@ function EmployeePanel({ user, onLogout }) {
 
   useEffect(()=>{
   Promise.all([st.get("users_360c"),st.get("evals_360c"),st.get("idps_360c"),st.get("evalwindow_360c"),st.get("readings_360c"),st.get("locks_360c"),st.get("approvals_360c"),st.get("impact_360c")]).then(([u,e,i,w,r,l,a,im])=>{
-   // نافذة التقييم تُخزَّن لكل فرع؛ نستخرج نافذة فرع هذا الموظف
+   // نافذة التقييم تُخزَّن لكل فرع؛ نستخرج نافذة فرع هذا الموظف، ونحفظ الكل لتقييم أطراف من فروع أخرى
    const myWin = (w&&w.branches) ? (w.branches[user.branch]||{isOpen:false}) : (w||{isOpen:false});
-   setUsersState(u||[]); setEvalsState(e||{}); setIdpsState(i||{}); setEvalWindowData(myWin); setReadings(r||{}); setLocks(l||{}); setApprovals(a||{}); setImpactData(im||{}); setLoaded(true);
+   setUsersState(u||[]); setEvalsState(e||{}); setIdpsState(i||{}); setEvalWindowData(myWin); setEvalWinAll(w||{branches:{}}); setReadings(r||{}); setLocks(l||{}); setApprovals(a||{}); setImpactData(im||{}); setLoaded(true);
   });
   if (canReqAccounts) st.get("acctRequests_360c").then(d=>setAcctRequests(Array.isArray(d)?d:[]));
   Promise.all([st.get("round2_360c"),st.get("twiceeval_360c")]).then(([r2,tw])=>setRound2Ctx(r2?.open,tw||[])); // ب-4
@@ -6213,7 +6302,7 @@ function EmployeePanel({ user, onLogout }) {
   </div>
   <div style={{display:"flex",gap:6,alignItems:"center"}}>
    <ChangePasswordButton userId={user.id} currentPassword={user.password} compact/>
-   <button onClick={onLogout} style={{padding:"4px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer"}}>خروج</button>
+   <RefreshButton/><button onClick={onLogout} style={{padding:"4px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
   </div>
   </div>
    </header>
@@ -6319,10 +6408,13 @@ function EmployeePanel({ user, onLogout }) {
   <div style={{fontSize:11,color:"#5B7A9E"}}>{t.job}</div>
   {done&&<div style={{fontSize:10,color:"#8B5CF6",marginTop:2}}>✓ تم التقييم</div>}
   </div>
-  <button onClick={()=>setPeerTarget(t)}
-  style={{padding:"6px 14px",borderRadius:8,border:done?"1px solid #8B5CF630":"none",background:done?"#8B5CF615":"linear-gradient(135deg,#6D28D9,#8B5CF6)",color:done?"#8B5CF6":"#fff",fontSize:11,cursor:"pointer",fontWeight:700}}>
+  {(()=>{ const ws=branchWindowStatus(evalWinAll,t.branch); return (!ws.open&&!done)
+  ? <span style={{padding:"6px 12px",borderRadius:8,background:"#F1F5F9",border:"1px solid #E2E8F0",color:"#94A3B8",fontSize:11,fontWeight:700}} title="نافذة تقييم فرع الزميل مغلقة">🔒 مغلق</span>
+  : <button onClick={()=>ws.open&&setPeerTarget(t)} disabled={!ws.open}
+  style={{padding:"6px 14px",borderRadius:8,border:done?"1px solid #8B5CF630":"none",background:done?"#8B5CF615":ws.open?"linear-gradient(135deg,#6D28D9,#8B5CF6)":"#CBD5E1",color:done?"#8B5CF6":"#fff",fontSize:11,cursor:ws.open?"pointer":"not-allowed",fontWeight:700}}>
   {done?"تعديل":"تقييم ▶"}
-  </button>
+  </button>;
+  })()}
   </div>
    );
    })}
@@ -6362,7 +6454,10 @@ function EmployeePanel({ user, onLogout }) {
    <div style={{fontSize:11,color:"#5B7A9E"}}>{ROLES_LIST[t.role]}{t.roleSubtype&&ROLE_SUBTYPES[t.role]?` • ${ROLE_SUBTYPES[t.role][t.roleSubtype]||""}`:""}</div>
    {done&&<div style={{fontSize:10,color:"#0891B2",marginTop:2}}>✓ تم التقييم</div>}
    </div>
-   <button onClick={()=>setRoleEvalTarget({user:t,party:"beneficiary"})} style={{padding:"6px 14px",borderRadius:8,border:done?"1px solid #0891B230":"none",background:done?"#0891B215":"linear-gradient(135deg,#0E7490,#0891B2)",color:done?"#0891B2":"#fff",fontSize:11,cursor:"pointer",fontWeight:700}}>{done?"تعديل":"تقييم ▶"}</button>
+   {(()=>{ const ws=branchWindowStatus(evalWinAll,t.branch); return (!ws.open&&!done)
+   ? <span style={{padding:"6px 12px",borderRadius:8,background:"#F1F5F9",border:"1px solid #E2E8F0",color:"#94A3B8",fontSize:11,fontWeight:700}} title="نافذة تقييم فرع هذا الشخص مغلقة">🔒 مغلق</span>
+   : <button onClick={()=>ws.open&&setRoleEvalTarget({user:t,party:"beneficiary"})} disabled={!ws.open} style={{padding:"6px 14px",borderRadius:8,border:done?"1px solid #0891B230":"none",background:done?"#0891B215":ws.open?"linear-gradient(135deg,#0E7490,#0891B2)":"#CBD5E1",color:done?"#0891B2":"#fff",fontSize:11,cursor:ws.open?"pointer":"not-allowed",fontWeight:700}}>{done?"تعديل":"تقييم ▶"}</button>;
+   })()}
    </div>
    );
    })}
