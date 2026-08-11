@@ -33,6 +33,24 @@ async function login(req, res) {
   if (!ok) {
     return res.status(401).json({ error: 'بيانات الدخول غير صحيحة' });
   }
+
+  // ─── وضع الصيانة ───
+  // يُفرض هنا لا في الواجهة، لسببين: الواجهة تُتجاوَز بنداء API مباشر، وقراءة
+  // الإعداد قبل الدخول تصطدم بـ requireAuth على /api/settings فتفشل صامتة.
+  // يُفحص بعد التحقّق من كلمة المرور حتى لا يُكشف وجود وضع الصيانة لمن لا يملك حساباً.
+  if (user.role !== 'admin') {
+    const row = db.prepare("SELECT value FROM settings WHERE skey = 'maintenanceMode'").get();
+    let maint = null;
+    try { maint = row ? JSON.parse(row.value) : null; } catch (e) { maint = null; }
+    if (maint && maint.enabled) {
+      db.prepare('INSERT INTO audit_log (user_id, action, ip) VALUES (?,?,?)')
+        .run(user.id, 'login_blocked_maintenance', req.ip);
+      return res.status(503).json({
+        error: maint.message || 'النظام قيد التحديث، يُرجى المحاولة لاحقاً',
+      });
+    }
+  }
+
   // سجل تدقيق
   db.prepare('INSERT INTO audit_log (user_id, action, ip) VALUES (?, ?, ?)')
     .run(user.id, 'login', req.ip);

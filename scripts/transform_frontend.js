@@ -50,12 +50,16 @@ report.push('✓ حُوّل export default إلى window.__AndlusApp');
 
 // 5) ربط شاشة الدخول بالمصادقة الحقيقية (API) بدل المقارنة المحلية
 const loginOld = /const login = async \(\) => \{\s*\n\s*if \(u === ADMIN_CREDS[\s\S]*?if \(found\) onLogin\(found\); else \{ setErr\(true\); setP\(""\); \}\s*\n\s*\};/;
+// ملاحظة: هذا البديل يستبدل دالّة login كاملةً، فأيّ منطق يُضاف داخلها في المصدر
+// (مثل فحص وضع الصيانة سابقاً) يُمحى صامتاً عند البناء. لذلك يُفرض وضع الصيانة في
+// الخادم (authController.login يُعيد 503)، ويكتفي هذا البديل بعرض رسالته.
 const loginNew = `const login = async () => {
   try {
     const user = await window.andlusAPI.auth.login(u, p);
     onLogin(user);
   } catch (e) {
-    setErr(true); setP("");
+    if (e && e.status === 503) { setErr(false); setP(""); setMaintMsg(e.message || "النظام قيد التحديث، يُرجى المحاولة لاحقاً"); return; }
+    setMaintMsg(""); setErr(true); setP("");
   }
   };`;
 if (loginOld.test(code)) { code = code.replace(loginOld, loginNew); report.push('✓ رُبطت شاشة الدخول بالـ API'); }

@@ -23,7 +23,13 @@
       throw new Error('انتهت الجلسة');
     }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'خطأ في الخادم');
+    if (!res.ok) {
+      // نُرفق رمز الحالة بالخطأ ليميّز المستدعي بين الحالات (مثلاً 503 = وضع صيانة
+      // فتُعرض رسالة الخادم كما هي، لا رسالة «بيانات الدخول غير صحيحة» العامّة).
+      const err = new Error(data.error || 'خطأ في الخادم');
+      err.status = res.status;
+      throw err;
+    }
     return data;
   }
 
