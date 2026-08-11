@@ -2335,7 +2335,9 @@ function RequestAccountForm({ user, onSubmit }) {
   const set = (k,v) => setF(p=>({...p,[k]:v}));
   const subtypes = ROLE_SUBTYPES[f.role] ? Object.entries(ROLE_SUBTYPES[f.role]) : [];
   // تحقّق صيغة البريد الإلكتروني (اسم المستخدم = البريد الفعلي)
-  const emailOk = /^[^\s@]+@as\.edu\.sa$/i.test(f.username.trim());
+  // نطبّع أولاً بإزالة المحارف الخفية (علامات الاتجاه RTL/مسافات غير مرئية قد يُدرجها المتصفّح العربي)
+  const cleanEmail = String(f.username||"").replace(/[\u200B-\u200F\u202A-\u202E\uFEFF]/g,"").trim();
+  const emailOk = /^[^\s@]+@as\.edu\.sa$/i.test(cleanEmail);
   const nationalIdOk = /^\d{10}$/.test(String(f.nationalId).trim());
   // الحقول الإلزامية: الاسم، البريد (صالح)، كلمة المرور، رقم الهوية (10 أرقام)، المسمّى الوظيفي، الدور، الفرع، والمرحلة (للفروع لا الإدارات)
   const stageRequired = !scopeIsDept;
@@ -2408,7 +2410,7 @@ function RequestAccountForm({ user, onSubmit }) {
    ⚠️ لإرسال الطلب، استكمل: {missing.join("، ")}
    </div>
    )}
-   <button onClick={()=>{ if(canSubmit){ onSubmit({...f}); setF({name:"",username:"",nationalId:"",password:"",role:"employee",roleSubtype:"",job:"",stage:"",branch:myBranches[0]||""}); } }}
+   <button onClick={()=>{ if(canSubmit){ onSubmit({...f,username:cleanEmail}); setF({name:"",username:"",nationalId:"",password:"",role:"employee",roleSubtype:"",job:"",stage:"",branch:myBranches[0]||""}); } }}
    disabled={!canSubmit} style={{width:"100%",marginTop:14,padding:"12px",borderRadius:12,border:"none",background:canSubmit?"linear-gradient(135deg,#DB2777,#EC4899)":"#CBD5E1",color:"#fff",fontWeight:700,fontSize:13,cursor:canSubmit?"pointer":"not-allowed"}}>📨 إرسال الطلب لمدير النظام</button>
   </div>
   );
@@ -2416,6 +2418,7 @@ function RequestAccountForm({ user, onSubmit }) {
 
 function BranchManagerPanel({ user, onLogout }) {
   const [tab,setTab] = useState("growth"); // growth | eval | approve
+  const [evalTarget,setEvalTarget] = useState(null);
   const [evalWinData,setEvalWinData] = useState({branches:{}});
   const [users,setUsersState] = useState([]);
   const [evals,setEvalsState] = useState({});
@@ -2448,7 +2451,7 @@ function BranchManagerPanel({ user, onLogout }) {
   showToast("📨 أُرسل الطلب لمدير النظام");
   };
 
-  useEffect(()=>{
+  const loadData = ()=>{
   Promise.all([st.get("users_360c"),st.get("evals_360c"),st.get("idps_360c"),st.get("approvals_360c"),st.get("readings_360c"),st.get("locks_360c"),st.get("editreq_360c"),st.get("impact_360c")]).then(([u,e,i,a,r,l,er,im])=>{
    setUsersState(u||[]); setEvalsState(e||{}); setIdpsState(i||{}); setApprovals(a||{}); setReadings(r||{}); setLocks(l||{}); setEditRequests(er||{}); setImpactData(im||{});
   });
@@ -2460,7 +2463,14 @@ function BranchManagerPanel({ user, onLogout }) {
   st.getShared("customWeights_360c").then(d=>{ if(d){ setActiveWeights(d); if(d.employee||d.leader||d.specialist||d.branch_ext) applyCustomWeights(d); else applyCustomWeights({employee:d}); } });
   st.getShared("customSources_360c").then(d=>{ if(d){ setActiveSources(d); } });
   st.getShared("customSourceMap_360c").then(d=>{ if(d){ setActiveCompMap(d); } });
+  };
+  useEffect(()=>{
+  loadData();
   setTimeout(()=>setUsersState(u=>[...u]), 300);
+  const onFocus=()=>loadData();
+  window.addEventListener("focus",onFocus);
+  const iv=setInterval(loadData,30000);
+  return ()=>{ window.removeEventListener("focus",onFocus); clearInterval(iv); };
   },[]);
 
   const myBranches = scopeBranches(user);
@@ -2562,7 +2572,7 @@ function BranchManagerPanel({ user, onLogout }) {
   <div style={{display:"flex",gap:6}}>
    <PrintButton title={`تقرير فرع ${user.branch}`} branch={user.branch}/>
    <ChangePasswordButton userId={user.id} currentPassword={user.password}/>
-   <RefreshButton/><button onClick={onLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
+   <RefreshButton onRefresh={loadData}/><button onClick={onLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
   </div>
   </div>
    </header>
@@ -2694,9 +2704,15 @@ function BranchManagerPanel({ user, onLogout }) {
    <div style={{fontSize:17,fontWeight:900,color:"#15385C",marginBottom:12}}>🏛️ قيادات الفرع (مدراء المراحل والوكلاء)</div>
    {branchLeaders.map(u=>{
    const es=getEmpFullStats(u,evals[u.id]||{}); const pct=es?.avg!=null?(es.avg/5)*100:null; const lv=es?.avg!=null?getLevel(es.avg):null;
-   return(<div key={u.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:"#F4F9FE",borderRadius:9,marginBottom:5}}>
+   const evDone=Object.keys((evals[u.id]||{}).stage_mgr||{}).length>0;
+   const ws=branchWindowStatus(evalWinData,u.branch);
+   return(<div key={u.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:"#F4F9FE",borderRadius:9,marginBottom:5,flexWrap:"wrap"}}>
    <div style={{flex:1,minWidth:0}}><span style={{fontSize:12,fontWeight:700,color:"#15385C"}}>{u.name}</span><span style={{fontSize:10,color:"#8CA3BD"}}> • {ROLES_LIST[u.role]}{u.stage?` • ${u.stage}`:""}</span></div>
    {pct!=null?<span style={{fontSize:12,fontWeight:900,color:lv.color,fontFamily:MONO}}>{pct.toFixed(1)}% <span style={{fontSize:9}}>{lv.label}</span></span>:<span style={{fontSize:10,color:"#8CA3BD"}}>لا تقييم</span>}
+   {/* مدير الفرع = المدير المباشر للقياديين → يقيّمهم بطرف stage_mgr */}
+   {ws.open||evDone
+    ? <button onClick={()=>setEvalTarget({user:u,party:"stage_mgr"})} style={{padding:"5px 13px",borderRadius:8,border:evDone?"1px solid #10B98130":"none",background:evDone?"#10B98115":"linear-gradient(135deg,#2563EB,#3B82F6)",color:evDone?"#10B981":"#fff",fontSize:11,cursor:"pointer",fontWeight:700}}>{evDone?"✏️ تعديل التقييم":"📝 تقييم ▶"}</button>
+    : <span style={{padding:"5px 11px",borderRadius:8,background:"#F1F5F9",border:"1px solid #E2E8F0",color:"#94A3B8",fontSize:10,fontWeight:700}}>🔒 مغلق</span>}
    <button onClick={()=>setViewUser(u)} style={{padding:"4px 10px",borderRadius:7,border:"1px solid #C7DBF0",background:"#fff",color:"#5B7A9E",fontSize:10,cursor:"pointer"}}>عرض</button>
    </div>);
    })}
@@ -2835,6 +2851,16 @@ function BranchManagerPanel({ user, onLogout }) {
    </main>
 
    {viewUser&&<Card360 targetUser={viewUser} empEval={evals[viewUser.id]||{}} idpData={idps[viewUser.id]} readings={readings} onSaveReadings={async d=>{setReadings(d);await st.set("readings_360c",d);}} currentUser={user} allEvals={evals} allUsers={users} approvals={approvals} onClose={()=>setViewUser(null)}/>}
+
+   {evalTarget&&<EvalForm partyKey={evalTarget.party} targetUser={evalTarget.user}
+    existingScores={(evals[evalTarget.user.id]||{})[evalTarget.party]||{}}
+    onSave={async(scores)=>{
+     const cur=evals[evalTarget.user.id]||{};
+     const ne={...evals,[evalTarget.user.id]:{...cur,[evalTarget.party]:scores}};
+     setEvalsState(ne); await st.set("evals_360c",ne); setEvalTarget(null); showToast("✓ تم حفظ التقييم");
+    }}
+    onCancel={()=>setEvalTarget(null)} locks={locks}
+    onLock={async(key)=>{const nl={...(locks||{}),[key]:{lockedAt:new Date().toISOString()}};setLocks(nl);await st.set('locks_360c',nl);}}/>}
 
    {viewPlanUser&&(
    <div onClick={()=>setViewPlanUser(null)} style={{position:"fixed",inset:0,background:"rgba(15,56,92,0.55)",zIndex:1000,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"30px 16px",overflowY:"auto"}}>
@@ -3218,18 +3244,22 @@ function LibraryManager({ onSave }) {
 }
 
 const scopeBranches = (u) => (u.branches&&u.branches.length) ? u.branches : (u.branch?[u.branch]:[]);
-// زر تحديث يدوي + عدّاد للتحديث التلقائي (بدل الخروج والدخول)
-function RefreshButton({ intervalSec = 25 }) {
+// زر تحديث يدوي + عدّاد — يعيد قراءة البيانات دون إعادة تحميل الصفحة (حتى لا يخرج المستخدم)
+function RefreshButton({ intervalSec = 30, onRefresh }) {
   const [count, setCount] = React.useState(intervalSec);
   const [spinning, setSpinning] = React.useState(false);
   React.useEffect(()=>{
     const t = setInterval(()=>setCount(c=>c<=1?intervalSec:c-1), 1000);
     return ()=>clearInterval(t);
   },[intervalSec]);
-  const doRefresh = ()=>{ setSpinning(true); setTimeout(()=>{ try{ window.location.reload(); }catch(e){} }, 150); };
+  const doRefresh = ()=>{
+    setSpinning(true); setCount(intervalSec);
+    try { if (typeof onRefresh==="function") onRefresh(); } catch(e){}
+    setTimeout(()=>setSpinning(false), 600);
+  };
   return (
-   <button onClick={doRefresh} title="تحديث البيانات الآن" style={{display:"flex",alignItems:"center",gap:6,padding:"5px 12px",borderRadius:20,border:"1px solid #2E7FB840",background:"#2E7FB810",color:"#2E7FB8",fontSize:11,cursor:"pointer",fontWeight:700}}>
-   <span style={{display:"inline-block",transition:"transform .3s",transform:spinning?"rotate(360deg)":"none"}}>🔄</span>
+   <button onClick={doRefresh} title="تحديث البيانات الآن (بدون إعادة تحميل)" style={{display:"flex",alignItems:"center",gap:6,padding:"5px 12px",borderRadius:20,border:"1px solid #2E7FB840",background:"#2E7FB810",color:"#2E7FB8",fontSize:11,cursor:"pointer",fontWeight:700}}>
+   <span style={{display:"inline-block",transition:"transform .6s",transform:spinning?"rotate(360deg)":"none"}}>🔄</span>
    تحديث <span style={{fontSize:9,color:"#8CA3BD",fontFamily:MONO}}>({count})</span>
    </button>
   );
@@ -3584,7 +3614,13 @@ function ExecGrowthReport({ users, idps, approvals, impactData, onOpenPlan }) {
   const name = r.programName||r.comp||"";
   if(!name) return;
   const info = srcInfo[name]||{};
-  const _mstr = `${info.type||""} ${info.method||""} ${r.sourceType||""} ${r.method||""} ${r.trainMethod||""} ${r.needSource||""}`; const isInternal = _mstr.includes("حضورية داخلية") || _mstr.includes("داخلي حضوري");
+  const _mstr = `${info.type||""} ${info.method||""} ${info.provider||""} ${info.category||""} ${r.sourceType||""} ${r.method||""} ${r.trainMethod||""} ${r.needSource||""} ${name}`;
+  // اكتشاف الدورة الحضورية الداخلية بأي من الصيغ المستخدمة
+  const isInternal = _mstr.includes("حضورية داخلية")
+   || _mstr.includes("داخلي حضوري")
+   || _mstr.includes("التدريب الداخلي")
+   || _mstr.includes("دورة حضورية داخلية")
+   || (_mstr.includes("داخلي") && _mstr.includes("حضور"));
   if(!isInternal) return;
   map[name] = map[name]||{name, provider:r.provider||info.provider||"", hours:r.hours||info.hours||"", enrolled:[]};
   map[name].enrolled.push({emp:u, row:r});
@@ -3834,7 +3870,7 @@ function AdminPanel({ onLogout }) {
 
   const showToast = (msg,c="#10B981") => { setToast({msg,c}); setTimeout(()=>setToast(null),2500); };
 
-  useEffect(()=>{
+
   const loadData = ()=>{
   st.get("users_360c").then(u=>setUsersState(u||[]));
   st.get("evals_360c").then(d=>setEvalsState(d||{}));
@@ -3851,6 +3887,7 @@ function AdminPanel({ onLogout }) {
   st.getShared("customSources_360c").then(d=>{ if(d){ setActiveSources(d); } });
   st.getShared("customSourceMap_360c").then(d=>{ if(d){ setActiveCompMap(d); } });
   };
+  useEffect(()=>{
   loadData();
   const onFocus=()=>loadData();
   window.addEventListener("focus",onFocus);
@@ -3943,7 +3980,7 @@ function AdminPanel({ onLogout }) {
    ))}
    <PrintButton title="لوحة مدير النظام" branch="جميع الفروع"/>
    <AdminChangePasswordButton/>
-   <RefreshButton/><button onClick={onLogout} style={{padding:"5px 11px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
+   <RefreshButton onRefresh={loadData}/><button onClick={onLogout} style={{padding:"5px 11px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
   </div>
   </div>
    </header>
@@ -4574,7 +4611,7 @@ function SupervisorTeamGrowth({ myTargets, idps, evals, editRequests, approvals,
   {rows.map((r,i)=>{
   const sc = statusColor[r.status]||"#5B7A9E";
   // ج-4: الدورة الحضورية الداخلية — التنفيذ من إدارة التدريب لا الموظف
-  const _ms = `${r.trainMethod||""} ${r.sourceType||""} ${r.needSource||""} ${r.method||""}`; const isInternalCourse = _ms.includes("حضورية داخلية") || _ms.includes("داخلي حضوري");
+  const _ms = `${r.trainMethod||""} ${r.sourceType||""} ${r.needSource||""} ${r.method||""} ${r.programName||""} ${r.comp||""}`; const isInternalCourse = _ms.includes("حضورية داخلية")||_ms.includes("داخلي حضوري")||_ms.includes("التدريب الداخلي")||(_ms.includes("داخلي")&&_ms.includes("حضور"));
   return(
    <div key={r.id} style={{background:"#F4F9FE",border:`1px solid ${sc}25`,borderRadius:10,padding:"10px 14px",marginBottom:6}}>
    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
@@ -4811,7 +4848,7 @@ function StageManagerPanel({ user, onLogout }) {
   // هل للموظف متابع فني؟ (إن لا، فمدير المرحلة هو من يرشّح)
   const hasSupervisor = (u) => (users||[]).some(s=>s.role==="supervisor" && getEvaluators(u,users).some(e=>e.id===s.id));
 
-  useEffect(()=>{
+
   const loadData = ()=>{
   st.get("users_360c").then(u=>setUsersState(u||[]));
   st.get("evalwindow_360c").then(w=>setEvalWinData(w||{branches:{}}));
@@ -4829,6 +4866,7 @@ function StageManagerPanel({ user, onLogout }) {
   st.getShared("customSources_360c").then(d=>{ if(d){ setActiveSources(d); } });
   st.getShared("customSourceMap_360c").then(d=>{ if(d){ setActiveCompMap(d); } });
   };
+  useEffect(()=>{
   loadData();
   setTimeout(()=>setUsersState(u=>[...u]), 300);
   // تحديث شبه لحظي عند النشر: عند عودة التركيز للصفحة + كل 25 ثانية
@@ -4901,7 +4939,7 @@ function StageManagerPanel({ user, onLogout }) {
   <div style={{display:"flex",gap:6}}>
    <PrintButton title={`تقرير المرحلة - ${user.name}`} branch={user.branch}/>
    <ChangePasswordButton userId={user.id} currentPassword={user.password}/>
-   <RefreshButton/><button onClick={onLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
+   <RefreshButton onRefresh={loadData}/><button onClick={onLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
   </div>
   </div>
    </header>
@@ -5127,7 +5165,7 @@ function EvaluatorPanel({ user, partyKey, onLogout }) {
    setImpactData(ni); await st.set("impact_360c",ni); showToast("✓ حُفظ قياس الأثر");
   };
 
-  useEffect(()=>{
+
   const loadData = ()=>{
   st.get("users_360c").then(u=>setUsersState(u||[]));
   st.get("evalwindow_360c").then(w=>setEvalWinData(w||{branches:{}}));
@@ -5149,6 +5187,7 @@ function EvaluatorPanel({ user, partyKey, onLogout }) {
   st.getShared("customSourceMap_360c").then(d=>{ if(d){ setActiveCompMap(d); } });
   setTimeout(()=>setUsersState(u=>[...u]), 300);
   };
+  useEffect(()=>{
   loadData();
   const onFocus=()=>loadData();
   window.addEventListener("focus",onFocus);
@@ -5237,7 +5276,7 @@ function EvaluatorPanel({ user, partyKey, onLogout }) {
   </div>
   <div style={{display:"flex",gap:6}}>
    <ChangePasswordButton userId={user.id} currentPassword={user.password}/>
-   <RefreshButton/><button onClick={onLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
+   <RefreshButton onRefresh={loadData}/><button onClick={onLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
   </div>
   </div>
    </header>
@@ -5841,8 +5880,8 @@ function EmployeeGrowthPlan({ user, empEval, idpData, onSave, viewerRole, impact
   )}
   {/* بيانات الدورة الحضورية الداخلية من إدارة التدريب (تاريخ/مكان/مدرب) */}
   {(()=>{
-   const _ms=`${row.trainMethod||""} ${row.method||""} ${row.needSource||""}`;
-   const isInt=_ms.includes("حضورية داخلية")||_ms.includes("داخلي حضوري");
+   const _ms=`${row.trainMethod||""} ${row.method||""} ${row.needSource||""} ${row.programName||""} ${row.comp||""}`;
+   const isInt=_ms.includes("حضورية داخلية")||_ms.includes("داخلي حضوري")||_ms.includes("التدريب الداخلي")||(_ms.includes("داخلي")&&_ms.includes("حضور"));
    if(!isInt) return null;
    const cname=row.programName||row.comp||"";
    const cd=intCourseData[`${cname}__${user.id}`]||{};
@@ -6004,7 +6043,7 @@ function ExecPanel({ user, onLogout }) {
   const [toast,setToast] = useState(null);
   const showToast = (msg,c="#10B981") => { setToast({msg,c}); setTimeout(()=>setToast(null),2000); };
 
-  useEffect(()=>{
+
   const loadData = ()=>{
   st.get("users_360c").then(u=>setUsersState(u||[]));
   st.get("evals_360c").then(d=>setEvalsState(d||{}));
@@ -6020,6 +6059,7 @@ function ExecPanel({ user, onLogout }) {
   st.getShared("compRoleItems_360c").then(d=>{ if(d){ setCompRoleItems(d); } });
   setTimeout(()=>setUsersState(u=>[...u]), 300);
   };
+  useEffect(()=>{
   loadData();
   const onFocus=()=>loadData();
   window.addEventListener("focus",onFocus);
@@ -6049,7 +6089,7 @@ function ExecPanel({ user, onLogout }) {
    </div>
    <div style={{display:"flex",gap:6}}>
    <ChangePasswordButton userId={user.id} currentPassword={user.password}/>
-   <RefreshButton/><button onClick={onLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
+   <RefreshButton onRefresh={loadData}/><button onClick={onLogout} style={{padding:"5px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
    </div>
    </div>
    </header>
@@ -6203,14 +6243,20 @@ function EmployeePanel({ user, onLogout }) {
 
   const showToast = (msg,c="#10B981") => { setToast({msg,c}); setTimeout(()=>setToast(null),2000); };
 
-  useEffect(()=>{
+  const loadData = ()=>{
   Promise.all([st.get("users_360c"),st.get("evals_360c"),st.get("idps_360c"),st.get("evalwindow_360c"),st.get("readings_360c"),st.get("locks_360c"),st.get("approvals_360c"),st.get("impact_360c")]).then(([u,e,i,w,r,l,a,im])=>{
-   // نافذة التقييم تُخزَّن لكل فرع؛ نستخرج نافذة فرع هذا الموظف، ونحفظ الكل لتقييم أطراف من فروع أخرى
    const myWin = (w&&w.branches) ? (w.branches[user.branch]||{isOpen:false}) : (w||{isOpen:false});
    setUsersState(u||[]); setEvalsState(e||{}); setIdpsState(i||{}); setEvalWindowData(myWin); setEvalWinAll(w||{branches:{}}); setReadings(r||{}); setLocks(l||{}); setApprovals(a||{}); setImpactData(im||{}); setLoaded(true);
   });
   if (canReqAccounts) st.get("acctRequests_360c").then(d=>setAcctRequests(Array.isArray(d)?d:[]));
   Promise.all([st.get("round2_360c"),st.get("twiceeval_360c")]).then(([r2,tw])=>setRound2Ctx(r2?.open,tw||[])); // ب-4
+  };
+  useEffect(()=>{
+  loadData();
+  const onFocus=()=>loadData();
+  window.addEventListener("focus",onFocus);
+  const iv=setInterval(loadData,30000);
+  return ()=>{ window.removeEventListener("focus",onFocus); clearInterval(iv); };
   },[]);
   // ج-1: إرسال طلب فتح حساب (مدير الإدارة)
   const submitAcctRequest = async (payload) => {
@@ -6302,7 +6348,7 @@ function EmployeePanel({ user, onLogout }) {
   </div>
   <div style={{display:"flex",gap:6,alignItems:"center"}}>
    <ChangePasswordButton userId={user.id} currentPassword={user.password} compact/>
-   <RefreshButton/><button onClick={onLogout} style={{padding:"4px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
+   <RefreshButton onRefresh={loadData}/><button onClick={onLogout} style={{padding:"4px 12px",borderRadius:20,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",marginRight:6}}>خروج</button>
   </div>
   </div>
    </header>
