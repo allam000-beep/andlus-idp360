@@ -82,14 +82,31 @@ app.use('/api/account-requests', require('./routes/accountRequests'));
 app.use('/api', require('./routes/data'));
 // اكتملت مسارات المنطق: evals, idps, impact, approvals, windows, settings...
 
-// خدمة الواجهة (React المبنية) من مجلد public
-app.use(express.static(path.join(__dirname, 'public')));
+// ─── الواجهة (React المبنية) من مجلد public ───
+// index.html وحده لا يُخزَّن في الكاش: هو الذي يحمل رقم إصدار الحزمة
+// (app.bundle.js?v=N)، فلو خُزّن بقي المستخدم يطلب الإصدار القديم بعد كل نشر
+// ويحتاج تحديثاً قوياً يدوياً. أمّا الحزمة فتبقى قابلة للتخزين (سرعة التحميل)،
+// لأنّ تغيير رقم الإصدار في رابطها يكفي لجلب الجديدة.
+const NO_CACHE = 'no-store, no-cache, must-revalidate, proxy-revalidate';
+function noCacheHeaders(res) {
+  res.set('Cache-Control', NO_CACHE);
+  res.set('Pragma', 'no-cache');   // للوسطاء القدامى
+  res.set('Expires', '0');
+}
+
+app.use(express.static(path.join(__dirname, 'public'), {
+  // يشمل الطلب المباشر /index.html والطلب الضمني على الجذر /
+  setHeaders: (res, filePath) => {
+    if (path.basename(filePath) === 'index.html') noCacheHeaders(res);
+  },
+}));
 // ج-3: صفحة إعادة تعيين كلمة المرور (يصلها الموظف عبر رابط البريد)
 app.get('/reset-password', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'reset-password.html'));
 });
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'المسار غير موجود' });
+  noCacheHeaders(res);   // مسارات الواجهة (SPA) تُخدَم بـ index.html — أيضاً بلا كاش
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
