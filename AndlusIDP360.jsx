@@ -3628,7 +3628,7 @@ function ExecGrowthReport({ users, idps, approvals, impactData, onOpenPlan }) {
   const [courses,setCourses] = useState({});
   const [savingKey,setSavingKey] = useState(null);
 
-  useEffect(()=>{ st.get("intcourses_360c").then(d=>setCourses(d||{})); },[]);
+  useEffect(()=>{ st.getShared("intcourses_360c").then(d=>setCourses(d||{})); },[]);
 
   const emps = (users||[]).filter(u=>u.role==="employee");
   const branches = [...new Set(emps.map(u=>u.branch).filter(Boolean))].sort();
@@ -3696,7 +3696,7 @@ function ExecGrowthReport({ users, idps, approvals, impactData, onOpenPlan }) {
   const key = `${courseName}__${empId}`;
   setSavingKey(key);
   const nc = {...courses, [key]:{...(courses[key]||{}), ...patch}};
-  setCourses(nc); await st.set("intcourses_360c",nc);
+  setCourses(nc); await st.setShared("intcourses_360c",nc);
   setTimeout(()=>setSavingKey(null),400);
   };
 
@@ -5626,7 +5626,7 @@ function EmployeeGrowthPlan({ user, empEval, idpData, onSave, viewerRole, impact
   // د-9: الشهادة الاحترافية
   const [cert,setCert] = useState(idpData?.certificate||null); // {name, isOther, status}
   const [intCourseData,setIntCourseData] = useState({}); // بيانات الدورات الحضورية من إدارة التدريب
-  useEffect(()=>{ st.get("intcourses_360c").then(d=>setIntCourseData(d||{})); },[]);
+  useEffect(()=>{ st.getShared("intcourses_360c").then(d=>setIntCourseData(d||{})); },[]);
   useEffect(()=>{ setCert(idpData?.certificate||null); },[idpData]);
   useEffect(()=>{ setIdpPlan(idpData?.plan||[]); setSelSources(idpData?.selSources||{}); setGoals(idpData?.goals||{}); setApproved(idpData?.approved||false); setApprovedBy(idpData?.approvedBy||""); setApprovedAt(idpData?.approvedAt||""); },[idpData]);
 
@@ -6161,7 +6161,19 @@ function ExecPanel({ user, onLogout }) {
   const rows = scope.map(u=>{
    const st360 = getEmpFullStats(u, evals[u.id]||{});
    const idp = idps[u.id];
-   return { u, score: st360?.avg??null, planApproved: idp?.approved, planRows: idp?.plan?.length||0 };
+   const plan = idp?.plan||[];
+   // نسب التطور المهني لهذا الشخص
+   const rowsApproved = idp?.approved;
+   const anyPlan = plan.length>0;
+   const executed = plan.filter(r=>r.status==="تم التنفيذ").length;
+   const measured = plan.filter(r=>{ const im=impactData?.[`${u.id}__${r.id}`]; return im&&(im.before!=null||im.after!=null||im.note); }).length;
+   return {
+    u, score: st360?.avg??null, planApproved: rowsApproved, planRows: plan.length,
+    st360, anyPlan, isFinal: idp?.isFinal, planCount: plan.length,
+    executedCount: executed, measuredCount: measured,
+    // اكتمال التقييم: هل قُيّم من طرف واحد على الأقل من الأطراف المطلوبة؟
+    evalDone: st360?.avg!=null,
+   };
   }).sort((a,b)=>(b.score??-1)-(a.score??-1));
 
   return (
@@ -6180,7 +6192,7 @@ function ExecPanel({ user, onLogout }) {
    </header>
    <main style={{maxWidth:1100,margin:"0 auto",padding:"20px 16px"}}>
    <div style={{display:"flex",gap:6,marginBottom:18,flexWrap:"wrap"}}>
-   {[{k:"perf",l:"📊 تقييم الأداء",c:"#2E7FB8"},{k:"growth",l:"🎯 التطور المهني",c:"#10B981"},{k:"mine",l:"👤 خطتي وتقييمي",c:"#8B5CF6"}].map(t=>(
+   {[{k:"perf",l:"📊 متابعة تقييم الأداء",c:"#2E7FB8"},{k:"growth",l:"🎯 متابعة التطور المهني",c:"#10B981"},{k:"mine",l:"👤 خطتي وتقييمي",c:"#8B5CF6"}].map(t=>(
    <button key={t.k} onClick={()=>setTab(t.k)} style={{flex:"1 1 auto",minWidth:150,padding:"13px 18px",borderRadius:24,border:"none",background:tab===t.k?`linear-gradient(135deg,${t.c},${t.c}cc)`:"#fff",color:tab===t.k?"#fff":"#5B7A9E",fontSize:13,fontWeight:800,cursor:"pointer",boxShadow:tab===t.k?`0 8px 22px ${t.c}45`:"0 2px 10px rgba(46,127,184,0.08)"}}>{t.l}</button>
    ))}
    </div>
@@ -6209,6 +6221,77 @@ function ExecPanel({ user, onLogout }) {
    ))}
    </div>
    )}
+   {/* ملخّص إحصائي مختصر — بالنسب، قابل للفصل بفلتر الفرع أعلاه */}
+   {(()=>{
+   const R = visRows; const n = R.length; if(!n) return null;
+   const pct = (x)=> n? Math.round((x/n)*100):0;
+   if(tab==="growth"){
+    const planned = R.filter(r=>r.anyPlan).length;
+    const approved = R.filter(r=>r.planApproved).length;
+    const totalRows = R.reduce((s,r)=>s+r.planCount,0);
+    const execRows = R.reduce((s,r)=>s+r.executedCount,0);
+    const measRows = R.reduce((s,r)=>s+r.measuredCount,0);
+    const stat = [
+     {l:"نسبة التخطيط", v:pct(planned), sub:`${planned}/${n}`, c:"#10B981"},
+     {l:"نسبة الاعتماد", v:pct(approved), sub:`${approved}/${n}`, c:"#2E7FB8"},
+     {l:"نسبة التنفيذ", v:totalRows?Math.round((execRows/totalRows)*100):0, sub:`${execRows}/${totalRows} بند`, c:"#F59E0B"},
+     {l:"نسبة قياس الأثر", v:totalRows?Math.round((measRows/totalRows)*100):0, sub:`${measRows}/${totalRows} بند`, c:"#8B5CF6"},
+    ];
+    return (
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10,marginBottom:16}}>
+    {stat.map(s=>(
+    <div key={s.l} style={{background:"#fff",border:`1px solid ${s.c}25`,borderRadius:14,padding:"14px 16px"}}>
+    <div style={{fontSize:11,color:"#5B7A9E",fontWeight:700,marginBottom:6}}>{s.l}</div>
+    <div style={{fontSize:26,fontWeight:900,color:s.c,fontFamily:MONO,lineHeight:1}}>{s.v}<span style={{fontSize:14}}>%</span></div>
+    <div style={{height:5,background:"#EEF4FB",borderRadius:3,marginTop:8,overflow:"hidden"}}><div style={{height:"100%",width:`${s.v}%`,background:s.c,borderRadius:3}}/></div>
+    <div style={{fontSize:9,color:"#8CA3BD",marginTop:5}}>{s.sub}</div>
+    </div>
+    ))}
+    </div>
+    );
+   } else {
+    const evaluated = R.filter(r=>r.evalDone).length;
+    const overallScores = R.map(r=>r.score).filter(x=>x!=null);
+    const overallAvg = overallScores.length? overallScores.reduce((a,b)=>a+b,0)/overallScores.length : null;
+    const partyAvg = {};
+    EVAL_PARTIES.forEach(p=>{
+     const vals = R.map(r=>r.st360?.partyScores?.[p.key]?.avg).filter(x=>x!=null);
+     partyAvg[p.key] = vals.length? vals.reduce((a,b)=>a+b,0)/vals.length : null;
+    });
+    const activeParties = EVAL_PARTIES.filter(p=>partyAvg[p.key]!=null);
+    return (
+    <div style={{marginBottom:16}}>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:10}}>
+    <div style={{background:"#fff",border:"1px solid #2E7FB825",borderRadius:14,padding:"14px 16px"}}>
+    <div style={{fontSize:11,color:"#5B7A9E",fontWeight:700,marginBottom:6}}>نسبة التقييمات المكتملة</div>
+    <div style={{fontSize:26,fontWeight:900,color:"#2E7FB8",fontFamily:MONO,lineHeight:1}}>{pct(evaluated)}<span style={{fontSize:14}}>%</span></div>
+    <div style={{height:5,background:"#EEF4FB",borderRadius:3,marginTop:8,overflow:"hidden"}}><div style={{height:"100%",width:`${pct(evaluated)}%`,background:"#2E7FB8",borderRadius:3}}/></div>
+    <div style={{fontSize:9,color:"#8CA3BD",marginTop:5}}>{evaluated}/{n} شخصاً</div>
+    </div>
+    <div style={{background:"#fff",border:`1px solid ${overallAvg!=null?getLevel(overallAvg).color:"#DDE9F5"}25`,borderRadius:14,padding:"14px 16px"}}>
+    <div style={{fontSize:11,color:"#5B7A9E",fontWeight:700,marginBottom:6}}>متوسّط الأداء العام</div>
+    <div style={{fontSize:26,fontWeight:900,color:overallAvg!=null?getLevel(overallAvg).color:"#8CA3BD",fontFamily:MONO,lineHeight:1}}>{overallAvg!=null?overallAvg.toFixed(2):"—"}<span style={{fontSize:12}}>/5</span></div>
+    {overallAvg!=null&&<div style={{fontSize:10,color:getLevel(overallAvg).color,marginTop:6,fontWeight:700}}>{getLevel(overallAvg).label}</div>}
+    </div>
+    </div>
+    {activeParties.length>0&&(
+    <div style={{background:"#F7FAFE",border:"1px solid #E3EEF9",borderRadius:14,padding:"14px 16px"}}>
+    <div style={{fontSize:12,fontWeight:800,color:"#15385C",marginBottom:10}}>متوسّط الأداء حسب الطرف المُقيّم</div>
+    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+    {activeParties.map(p=>{ const v=partyAvg[p.key]; const lv=getLevel(v); return (
+    <div key={p.key} style={{display:"flex",alignItems:"center",gap:10}}>
+    <span style={{fontSize:11,color:p.color,fontWeight:700,minWidth:100}}>{p.icon} {p.label}</span>
+    <div style={{flex:1,height:8,background:"#EEF4FB",borderRadius:4,overflow:"hidden"}}><div style={{height:"100%",width:`${(v/5)*100}%`,background:lv.color,borderRadius:4}}/></div>
+    <span style={{fontSize:12,fontWeight:900,color:lv.color,fontFamily:MONO,minWidth:36,textAlign:"left"}}>{v.toFixed(2)}</span>
+    </div>
+    );})}
+    </div>
+    </div>
+    )}
+    </div>
+    );
+   }
+   })()}
    {rows.length===0?(
    <div style={{textAlign:"center",padding:40,color:"#5B7A9E",background:"#fff",borderRadius:12}}>لا يوجد أشخاص ضمن نطاقك بعد.</div>
    ):branchKeys.map(bk=>{
@@ -6340,7 +6423,7 @@ function DeptManagerTeam({ user, users, evals, idps, readings, impactData, locks
 }
 
 // المشرف التعليمي (امتداد فني/تميز تعليمي): يتابع المشرفين المختصين في فرعه — تطور مهني + تقييم أداء
-function EduSupervisorTeam({ user, team, users, evals, idps, readings, impactData, locks, setLocks, onSaveEval, onOpenCard, showToast }) {
+function EduSupervisorTeam({ user, team, users, evals, idps, readings, impactData, locks, setLocks, onSaveEval, onApprovePlan, onOpenCard, showToast }) {
   const [sub,setSub] = useState("growth");
   const [evalTarget,setEvalTarget] = useState(null);
   const [evalWinAll,setEvalWinAll] = useState({branches:{}});
@@ -6368,6 +6451,10 @@ function EduSupervisorTeam({ user, team, users, evals, idps, readings, impactDat
    <div style={{width:32,height:32,borderRadius:9,background:ap?"#10B98115":"#F4F9FE",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}}>{ap?"✅":"🎯"}</div>
    <div style={{flex:1,minWidth:0}}><div style={{fontWeight:700,fontSize:12,color:"#15385C"}}>{u.name}</div><div style={{fontSize:10,color:"#8CA3BD"}}>مشرف مختص{u.branch?` • ${u.branch}`:""} • {rows.length} بند</div></div>
    <span style={{fontSize:10,color:ap?"#10B981":"#F59E0B",background:ap?"#10B98115":"#F59E0B15",padding:"3px 10px",borderRadius:20,fontWeight:700}}>{ap?"معتمدة":plan.isFinal?"بانتظار الاعتماد":"مسودّة"}</span>
+   {onApprovePlan&&plan.isFinal&&(ap
+    ? <button onClick={(e)=>{e.preventDefault();onApprovePlan(u.id,false);}} style={{padding:"5px 12px",borderRadius:8,border:"1px solid #EF444430",background:"#EF444410",color:"#EF4444",fontSize:11,cursor:"pointer",fontWeight:700}}>↩ إلغاء الاعتماد</button>
+    : <button onClick={(e)=>{e.preventDefault();onApprovePlan(u.id,true);}} style={{padding:"5px 12px",borderRadius:8,border:"none",background:"linear-gradient(135deg,#059669,#10B981)",color:"#fff",fontSize:11,cursor:"pointer",fontWeight:700}}>✅ اعتماد</button>
+   )}
    <button onClick={(e)=>{e.preventDefault();onOpenCard&&onOpenCard(u);}} style={{padding:"5px 12px",borderRadius:8,border:"1px solid #10B98140",background:"#10B98110",color:"#059669",fontSize:11,cursor:"pointer",fontWeight:700}}>👁️ عرض الخطة</button>
    </summary>
    <div style={{padding:"0 14px 12px",borderTop:"1px solid #EEF4FB"}}>
@@ -6727,7 +6814,7 @@ function EmployeePanel({ user, onLogout }) {
 
   {empTab==="supteam"&&isEduSupervisor&&(
   <EduSupervisorTeam user={user} team={eduSupTeam} users={users} evals={evals} idps={idps} readings={readings} impactData={impactData}
-   locks={locks} setLocks={setLocks} onSaveEval={saveTeamEval}
+   locks={locks} setLocks={setLocks} onSaveEval={saveTeamEval} onApprovePlan={approveTeamPlan}
    onOpenCard={(u)=>{ setTeamCardTarget(u); }} showToast={showToast}/>
   )}
 
