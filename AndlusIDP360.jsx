@@ -3030,6 +3030,9 @@ function LibraryManager({ onSave }) {
   const [importTxt,setImportTxt]   = useState("");
   const [importErr,setImportErr]   = useState("");
   const [showImport,setShowImport] = useState(false);
+  const [showLinkImport,setShowLinkImport] = useState(false); // استيراد ربط المصادر بالجدارات
+  const [linkImportTxt,setLinkImportTxt] = useState("");
+  const [linkImportReport,setLinkImportReport] = useState(null);
   const [toast,setToast] = useState(null);
   const showT = (msg,c="#10B981") => { setToast({msg,c}); setTimeout(()=>setToast(null),2200); };
 
@@ -3055,8 +3058,59 @@ function LibraryManager({ onSave }) {
 
   const toggleLink = (comp,name) => setCompMap(m=>{ const cur=m[comp]||[]; return {...m,[comp]:cur.includes(name)?cur.filter(n=>n!==name):[...cur,name]}; });
 
+  // استيراد جماعي لربط المصادر بالجدارات — كل سطر: «اسم الجدارة, مصدر؛ مصدر؛ ...»
+  // يدمج مع الروابط الحالية (لا يمحوها)، ويطابق أسماء المصادر بتسامح (تجاهل فراغات زائدة)
+  const handleLinkImport = () => {
+   const txt = (linkImportTxt||"").trim();
+   if(!txt){ setLinkImportReport({error:"الرجاء لصق البيانات أولاً."}); return; }
+   // كشف الترميز المشوّه
+   if(/Ø|Ù|Ã|Â/.test(txt) && (txt.match(/[Ø|Ù]/g)||[]).length>5){
+    setLinkImportReport({error:"⚠️ النصّ مشوّه الترميز (حُفظ Excel بترميز غير عربي). الحلّ: انسخ الأعمدة مباشرةً من Excel والصقها هنا بدل حفظها كـCSV."});
+    return;
+   }
+   const allCompNames = new Set(Object.keys(getActiveComps()));
+   const srcNames = sources.map(s=>s.name);
+   const norm = (s)=>String(s||"").replace(/\s+/g," ").trim();
+   const srcByNorm = {}; srcNames.forEach(n=>{ srcByNorm[norm(n)]=n; });
+   const compByNorm = {}; [...allCompNames].forEach(n=>{ compByNorm[norm(n)]=n; });
+   const lines = txt.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+   let linkedCount=0, compHit=0, compMiss=[], srcMiss=new Set();
+   const nm = {...compMap};
+   lines.forEach((line,i)=>{
+    if(i===0 && /الجدار|المصادر|competency|source/i.test(line) && !line.includes("؛") && line.split(/[,،]/).length<=2 && !srcByNorm[norm(line.split(/[,،]/)[1]||"")]) return; // تخطّي صفّ العناوين
+    // نفصل أول فاصلة (جدارة) عن الباقي (مصادر)
+    const firstComma = line.search(/[,،\t]/);
+    if(firstComma<0) return;
+    const compRaw = line.slice(0,firstComma);
+    const rest = line.slice(firstComma+1);
+    const compName = compByNorm[norm(compRaw)];
+    if(!compName){ compMiss.push(compRaw.trim()); return; }
+    compHit++;
+    const srcList = rest.split(/[؛;]/).map(s=>norm(s)).filter(Boolean);
+    const cur = new Set(nm[compName]||[]);
+    srcList.forEach(sn=>{
+     const realName = srcByNorm[sn];
+     if(realName){ if(!cur.has(realName)){ cur.add(realName); linkedCount++; } }
+     else srcMiss.add(sn);
+    });
+    nm[compName] = [...cur];
+   });
+   setCompMap(nm); setActiveCompMap(nm);
+   setLinkImportReport({
+    ok:true, linkedCount, compHit,
+    compMiss:[...new Set(compMiss)].slice(0,20), compMissTotal:new Set(compMiss).size,
+    srcMiss:[...srcMiss].slice(0,20), srcMissTotal:srcMiss.size,
+   });
+   showT(`✓ رُبط ${linkedCount} ارتباطاً عبر ${compHit} جدارة`);
+  };
+
   const handleImport = () => {
   setImportErr(""); const txt=importTxt.trim(); if(!txt) return;
+  // كشف الترميز المشوّه (نصّ عربي حُفظ UTF-8 وقُرئ Windows-1252): يظهر بأحرف مثل Ø Ù Ø§
+  if(/Ø|Ù|Ã|Â/.test(txt) && (txt.match(/[Ø|Ù]/g)||[]).length>5){
+   setImportErr("⚠️ يبدو أن النصّ مشوّه الترميز (نتيجة حفظ Excel بترميز غير عربي). الحلّ الأضمن: انسخ الأعمدة مباشرةً من Excel والصقها هنا (لا تحفظ كـCSV)، أو احفظ الملفّ بترميز UTF-8.");
+   return;
+  }
   try {
    let parsed;
    if(txt.startsWith("[")||txt.startsWith("{")) { parsed=JSON.parse(txt); if(!Array.isArray(parsed)) parsed=[parsed]; }
@@ -3176,8 +3230,11 @@ function LibraryManager({ onSave }) {
 
    {subTab==="links"&&(
   <div>
-  <div style={{fontSize:11,color:"#5B7A9E",marginBottom:10,background:"#FFFFFF",borderRadius:8,padding:"8px 14px"}}>
+  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
+   <div style={{fontSize:11,color:"#5B7A9E",background:"#FFFFFF",borderRadius:8,padding:"8px 14px",flex:1}}>
    📎 اختر لكل جدارة المصادر المرتبطة بها — ستظهر في خطة التطوير تلقائياً
+   </div>
+   <button onClick={()=>{setShowLinkImport(true);setLinkImportReport(null);}} style={{padding:"9px 16px",borderRadius:10,border:"none",background:"linear-gradient(135deg,#2563EB,#3B82F6)",color:"#fff",fontSize:12,fontWeight:800,cursor:"pointer",whiteSpace:"nowrap"}}>📥 استيراد الربط جماعياً</button>
   </div>
   <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
    <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 ابحث عن جدارة..." style={{flex:1,minWidth:180,padding:"9px 12px",borderRadius:10,border:"1px solid #DDE9F5",background:"#F4F9FE",fontSize:12,color:"#15385C"}}/>
@@ -3297,6 +3354,45 @@ function LibraryManager({ onSave }) {
    <div style={{display:"flex",gap:10,marginTop:10}}>
    <button onClick={()=>{setShowImport(false);setImportTxt("");setImportErr("");}} style={{flex:1,padding:"10px",borderRadius:10,border:"1px solid #C7DBF0",background:"transparent",color:"#5B7A9E",cursor:"pointer"}}>إلغاء</button>
    <button onClick={handleImport} disabled={!importTxt.trim()} style={{flex:2,padding:"10px",borderRadius:10,border:"none",background:importTxt.trim()?"linear-gradient(135deg,#6D28D9,#8B5CF6)":"#DDE9F5",color:importTxt.trim()?"#fff":"#334155",fontWeight:700,cursor:importTxt.trim()?"pointer":"default"}}>📥 استيراد</button>
+   </div>
+  </div>
+  </div>
+   )}
+
+   {showLinkImport&&(
+  <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:800,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+  <div style={{background:"#FFFFFF",border:"1px solid #3B82F640",borderRadius:20,width:"100%",maxWidth:620,maxHeight:"90vh",overflowY:"auto",padding:24,direction:"rtl"}}>
+   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+   <span style={{fontSize:17,fontWeight:900,color:"#15385C"}}>📥 استيراد ربط المصادر بالجدارات</span>
+   <button onClick={()=>{setShowLinkImport(false);setLinkImportTxt("");setLinkImportReport(null);}} style={{background:"none",border:"none",color:"#5B7A9E",fontSize:20,cursor:"pointer"}}>✕</button>
+   </div>
+   <div style={{background:"#EFF6FF",borderRadius:10,padding:"12px 14px",marginBottom:12,fontSize:12,color:"#1E40AF",lineHeight:1.9}}>
+   <strong>الصيغة:</strong> كل سطر = جدارة واحدة. أوّل فاصلة تفصل اسم الجدارة عن مصادرها، والمصادر بينها فاصلة منقوطة <code style={{background:"#DBEAFE",padding:"1px 5px",borderRadius:4}}>؛</code><br/>
+   <strong>مثال:</strong><br/>
+   <code style={{display:"block",background:"#fff",padding:"8px 10px",borderRadius:6,marginTop:4,color:"#334155",direction:"rtl",fontSize:11}}>
+   التخطيط الاستراتيجي، كتاب الإدارة الحديثة؛ دورة القيادة<br/>
+   التواصل الفعّال، مهارات العرض؛ ورشة الإصغاء
+   </code>
+   <div style={{marginTop:8,fontSize:11,color:"#3B82F6"}}>✓ يُدمج مع روابطك الحالية (لا يمحوها) • ✓ يبقى كل ارتباط قابلاً للحذف/التعديل يدوياً بعدها • ✓ يطابق الأسماء بتسامح للفراغات</div>
+   </div>
+   <textarea value={linkImportTxt} onChange={e=>setLinkImportTxt(e.target.value)} rows={9} placeholder="التخطيط الاستراتيجي، مصدر1؛ مصدر2&#10;التواصل الفعّال، مصدر3؛ مصدر4"
+   style={{width:"100%",padding:"10px",background:"#F4F9FE",border:"1px solid #C7DBF0",borderRadius:8,color:"#1E293B",fontFamily:"monospace",fontSize:12,boxSizing:"border-box",resize:"vertical",direction:"rtl"}}/>
+   {linkImportReport&&linkImportReport.error&&<div style={{color:"#EF4444",fontSize:12,marginTop:8,background:"#EF444412",padding:"8px 12px",borderRadius:8}}>{linkImportReport.error}</div>}
+   {linkImportReport&&linkImportReport.ok&&(
+   <div style={{marginTop:10,background:"#F0FDF4",border:"1px solid #86EFAC",borderRadius:10,padding:"12px 14px",fontSize:12,color:"#15803D",lineHeight:1.9}}>
+   ✅ <strong>تمّ الاستيراد:</strong> رُبط <strong>{linkImportReport.linkedCount}</strong> ارتباطاً جديداً عبر <strong>{linkImportReport.compHit}</strong> جدارة.
+   {linkImportReport.compMissTotal>0&&(
+   <div style={{color:"#B45309",marginTop:6}}>⚠️ {linkImportReport.compMissTotal} جدارة لم تُطابَق (تحقّق من الاسم): {linkImportReport.compMiss.join("، ")}{linkImportReport.compMissTotal>20?"...":""}</div>
+   )}
+   {linkImportReport.srcMissTotal>0&&(
+   <div style={{color:"#B45309",marginTop:6}}>⚠️ {linkImportReport.srcMissTotal} مصدراً لم يُطابَق (غير موجود في المكتبة): {linkImportReport.srcMiss.join("، ")}{linkImportReport.srcMissTotal>20?"...":""}</div>
+   )}
+   <div style={{color:"#5B7A9E",marginTop:6,fontSize:11}}>راجع النتائج في القائمة أدناه، ثم اضغط «💾 حفظ» بالأسفل لتثبيت الروابط على الخادم.</div>
+   </div>
+   )}
+   <div style={{display:"flex",gap:10,marginTop:12}}>
+   <button onClick={()=>{setShowLinkImport(false);setLinkImportTxt("");setLinkImportReport(null);}} style={{flex:1,padding:"11px",borderRadius:10,border:"1px solid #C7DBF0",background:"transparent",color:"#5B7A9E",cursor:"pointer",fontWeight:700}}>إغلاق</button>
+   <button onClick={handleLinkImport} disabled={!linkImportTxt.trim()} style={{flex:2,padding:"11px",borderRadius:10,border:"none",background:linkImportTxt.trim()?"linear-gradient(135deg,#2563EB,#3B82F6)":"#DDE9F5",color:linkImportTxt.trim()?"#fff":"#334155",fontWeight:700,cursor:linkImportTxt.trim()?"pointer":"default"}}>📥 استيراد ومعاينة</button>
    </div>
   </div>
   </div>
@@ -5626,7 +5722,14 @@ function EmployeeGrowthPlan({ user, empEval, idpData, onSave, viewerRole, impact
   // د-9: الشهادة الاحترافية
   const [cert,setCert] = useState(idpData?.certificate||null); // {name, isOther, status}
   const [intCourseData,setIntCourseData] = useState({}); // بيانات الدورات الحضورية من إدارة التدريب
-  useEffect(()=>{ st.getShared("intcourses_360c").then(d=>setIntCourseData(d||{})); },[]);
+  useEffect(()=>{
+   const load=()=>st.getShared("intcourses_360c").then(d=>setIntCourseData(d||{}));
+   load();
+   const iv=setInterval(load,30000);
+   const onFocus=()=>load();
+   window.addEventListener("focus",onFocus);
+   return ()=>{ clearInterval(iv); window.removeEventListener("focus",onFocus); };
+  },[]);
   useEffect(()=>{ setCert(idpData?.certificate||null); },[idpData]);
   useEffect(()=>{ setIdpPlan(idpData?.plan||[]); setSelSources(idpData?.selSources||{}); setGoals(idpData?.goals||{}); setApproved(idpData?.approved||false); setApprovedBy(idpData?.approvedBy||""); setApprovedAt(idpData?.approvedAt||""); },[idpData]);
 
@@ -5964,10 +6067,12 @@ function EmployeeGrowthPlan({ user, empEval, idpData, onSave, viewerRole, impact
   )}
   {/* بيانات الدورة الحضورية الداخلية من إدارة التدريب (تاريخ/مكان/مدرب) */}
   {(()=>{
-   const _ms=`${row.trainMethod||""} ${row.method||""} ${row.needSource||""} ${row.programName||""} ${row.comp||""}`;
-   const isInt=_ms.includes("حضورية داخلية")||_ms.includes("داخلي حضوري")||_ms.includes("التدريب الداخلي")||(_ms.includes("داخلي")&&_ms.includes("حضور"));
-   if(!isInt) return null;
    const cname=row.programName||row.comp||"";
+   const _sinfo=getSourceInfo(cname)||{};
+   const _sprov=row.provider||_sinfo.provider||"";
+   const _ms=`${_sinfo.type||""} ${_sinfo.method||""} ${_sprov} ${_sinfo.category||""} ${row.trainMethod||""} ${row.method||""} ${row.needSource||""} ${row.programName||""} ${row.comp||""}`;
+   const isInt=_ms.includes("حضورية داخلية")||_ms.includes("داخلي حضوري")||_ms.includes("التدريب الداخلي")||_ms.includes("دورة حضورية داخلية")||_sprov.includes("التدريب الداخلي")||(_ms.includes("داخلي")&&_ms.includes("حضور"));
+   if(!isInt) return null;
    const cd=intCourseData[`${cname}__${user.id}`]||{};
    const has=cd.actualDate||cd.location||cd.trainer||cd.status;
    const pct=cd.attendPct!==undefined&&cd.attendPct!==""?Number(cd.attendPct):null;
@@ -6123,6 +6228,7 @@ function ExecPanel({ user, onLogout }) {
   const [impactData,setImpactData] = useState({});
   const [readings,setReadings] = useState({});
   const [locks,setLocks] = useState({});
+  const [approvals,setApprovals] = useState({});
   const [viewTarget,setViewTarget] = useState(null);
   const [evalWinData,setEvalWinData] = useState({branches:{}});
   const [toast,setToast] = useState(null);
@@ -6136,6 +6242,7 @@ function ExecPanel({ user, onLogout }) {
   st.get("impact_360c").then(d=>setImpactData(d||{}));
   st.get("readings_360c").then(d=>setReadings(d||{}));
   st.get("locks_360c").then(d=>setLocks(d||{}));
+  st.get("approvals_360c").then(d=>setApprovals(d||{}));
   st.get("evalwindow_360c").then(w=>setEvalWinData(w||{branches:{}}));
   st.getShared("customComps_360c").then(d=>{ if(d){ setActiveComps(d); COMPETENCIES_WITH_ITEMS=d; } });
   st.getShared("profCerts_360c").then(d=>{ if(d&&d.length){ setProfCerts(d); } });
@@ -6212,13 +6319,21 @@ function ExecPanel({ user, onLogout }) {
    <div style={{fontSize:14,fontWeight:900,color:tabColor}}>{tab==="perf"?"📊 متابعة تقييم الأداء":"🎯 متابعة التطور المهني"} — كل الفروع والإدارات</div>
    <div style={{fontSize:11,color:"#5B7A9E",marginTop:2}}>{scope.length} شخصاً ضمن نطاقك • {branchesInScope.length} فرع/إدارة</div>
    </div>
-   {/* فلتر الفصل بدلالة الفرع/الإدارة */}
-   {branchesInScope.length>1&&(
-   <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
-   <button onClick={()=>setExecBranchF("")} style={{padding:"7px 14px",borderRadius:20,border:"none",background:!execBranchF?tabColor:"#EEF4FB",color:!execBranchF?"#fff":"#5B7A9E",fontSize:11,fontWeight:700,cursor:"pointer"}}>الكل</button>
-   {branchesInScope.map(b=>(
-   <button key={b} onClick={()=>setExecBranchF(b)} style={{padding:"7px 14px",borderRadius:20,border:"none",background:execBranchF===b?tabColor:"#EEF4FB",color:execBranchF===b?"#fff":"#5B7A9E",fontSize:11,fontWeight:700,cursor:"pointer"}}>{b}</button>
-   ))}
+   {/* فلتر الفصل بدلالة الفرع/الإدارة — يظهر متى وُجد فرع/إدارة واحد على الأقل */}
+   {branchesInScope.length>=1&&(
+   <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14,alignItems:"center"}}>
+   <span style={{fontSize:11,color:"#8CA3BD",fontWeight:700,marginLeft:4}}>🔍 تصفية:</span>
+   <button onClick={()=>setExecBranchF("")} style={{padding:"7px 14px",borderRadius:20,border:"none",background:!execBranchF?tabColor:"#EEF4FB",color:!execBranchF?"#fff":"#5B7A9E",fontSize:11,fontWeight:700,cursor:"pointer"}}>الكل ({scope.length})</button>
+   {branchesInScope.map(b=>{ const cnt=scope.filter(u=>u.branch===b).length; return(
+   <button key={b} onClick={()=>setExecBranchF(b)} style={{padding:"7px 14px",borderRadius:20,border:"none",background:execBranchF===b?tabColor:"#EEF4FB",color:execBranchF===b?"#fff":"#5B7A9E",fontSize:11,fontWeight:700,cursor:"pointer"}}>{isDepartment(b)?"🏢":"🏛️"} {b} ({cnt})</button>
+   );})}
+   </div>
+   )}
+   {scope.length===0&&(
+   <div style={{textAlign:"center",padding:40,color:"#5B7A9E",background:"#fff",borderRadius:12,border:"1px dashed #DDE9F5"}}>
+   <div style={{fontSize:32,marginBottom:8}}>📭</div>
+   <div style={{fontWeight:700,color:"#15385C",marginBottom:4}}>لا يوجد أشخاص ضمن نطاقك بعد</div>
+   <div style={{fontSize:12}}>عند إضافة حسابات للإدارات/الفروع التابعة لك، ستظهر ملخّصاتها هنا.</div>
    </div>
    )}
    {/* ملخّص إحصائي مختصر — بالنسب، قابل للفصل بفلتر الفرع أعلاه */}
